@@ -45,15 +45,30 @@ kube version    # print the version
 | `n`            | switch namespace      |
 | `c`            | switch context        |
 | `/`            | filter by name        |
-| `enter` / `y`  | view YAML             |
+| `enter`        | open detail dashboard |
+| `y`            | view YAML             |
 | `d`            | describe              |
-| `l`            | logs (pods)           |
+| `l`            | logs (live)           |
 | `x`            | delete (confirm)      |
 | `R`            | refresh now           |
 | `esc`          | back / clear filter   |
 | `ctrl+c`       | quit                  |
 
 The list auto-refreshes every few seconds. Mouse wheel scrolls everywhere.
+
+### Detail dashboard
+
+Press `enter` on a deployment (or statefulset / daemonset / job) to drill in,
+Lens/Aptakube style:
+
+- a summary (replicas, strategy, images, age),
+- its live **pods with CPU / memory** (`kubectl top`, auto-refreshing),
+- and from there: `y` YAML, `d` describe, `l` logs of the selected pod,
+  `p` to open a pod, `esc` to go back.
+
+`enter` on a pod shows its containers and pod-level metrics. Logs stream live
+(`kubectl logs -f`) and auto-follow the tail; `f` toggles follow, `G` jumps to
+live.
 
 ## Resources
 

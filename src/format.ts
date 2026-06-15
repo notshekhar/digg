@@ -161,3 +161,69 @@ export const KINDS: KindDef[] = [
 export function findKind(name: string): KindDef | undefined {
     return KINDS.find((k) => k.name === name);
 }
+
+/** Kinds that own a set of pods we can drill into. */
+export const WORKLOAD_KINDS = new Set(["deployments", "statefulsets", "daemonsets", "replicasets", "jobs"]);
+
+/** Build a `k=v,k=v` label selector from a workload's spec.selector.matchLabels. */
+export function workloadSelector(obj: K8sObject): string | undefined {
+    const match = (obj.spec as { selector?: { matchLabels?: Record<string, string> } })?.selector?.matchLabels;
+    if (!match || Object.keys(match).length === 0) {
+        return undefined;
+    }
+    return Object.entries(match)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(",");
+}
+
+function images(obj: K8sObject): string {
+    const containers =
+        ((obj.spec as { template?: { spec?: { containers?: { image?: string }[] } } })?.template?.spec?.containers) ??
+        ((obj.spec as { containers?: { image?: string }[] })?.containers) ??
+        [];
+    return containers.map((c) => c.image ?? "").filter(Boolean).join(", ");
+}
+
+/** Key/value summary rows shown at the top of a workload detail dashboard. */
+export function workloadSummary(obj: K8sObject): [string, string][] {
+    const s = obj.status as {
+        replicas?: number;
+        readyReplicas?: number;
+        updatedReplicas?: number;
+        availableReplicas?: number;
+        numberReady?: number;
+        desiredNumberScheduled?: number;
+    };
+    const rows: [string, string][] = [];
+    rows.push(["Namespace", obj.metadata?.namespace ?? "—"]);
+    if (s?.desiredNumberScheduled !== undefined) {
+        rows.push(["Ready", `${s.numberReady ?? 0}/${s.desiredNumberScheduled}`]);
+    } else {
+        rows.push(["Replicas", `${s?.readyReplicas ?? 0} ready / ${s?.replicas ?? 0} desired`]);
+        rows.push(["Updated", String(s?.updatedReplicas ?? 0)]);
+        rows.push(["Available", String(s?.availableReplicas ?? 0)]);
+    }
+    const strategy = (obj.spec as { strategy?: { type?: string } })?.strategy?.type;
+    if (strategy) {
+        rows.push(["Strategy", strategy]);
+    }
+    rows.push(["Images", images(obj) || "—"]);
+    rows.push(["Age", age(obj)]);
+    return rows;
+}
+
+/** Container rows for a pod detail (name, image, ready, restarts). */
+export function podContainers(obj: K8sObject): { name: string; image: string; ready: string; restarts: string }[] {
+    const specContainers = (obj.spec as { containers?: { name?: string; image?: string }[] })?.containers ?? [];
+    const statuses = (obj.status as { containerStatuses?: { name?: string; ready?: boolean; restartCount?: number }[] })
+        ?.containerStatuses ?? [];
+    return specContainers.map((c) => {
+        const st = statuses.find((s) => s.name === c.name);
+        return {
+            name: c.name ?? "",
+            image: c.image ?? "",
+            ready: st?.ready ? "true" : "false",
+            restarts: String(st?.restartCount ?? 0),
+        };
+    });
+}

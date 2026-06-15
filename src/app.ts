@@ -1,6 +1,7 @@
 import { type Component, TUI, ProcessTerminal, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
     type K8sObject,
+    type PodMetrics,
     type ResourceRef,
     deleteResource,
     describe,
@@ -10,21 +11,23 @@ import {
     getYaml,
     isKubectlAvailable,
     listResources,
+    topPods,
 } from "./kubectl.ts";
-import { type KindDef, KINDS, findKind } from "./format.ts";
+import { type KindDef, KINDS, WORKLOAD_KINDS, findKind, workloadSelector } from "./format.ts";
 import { ui } from "./theme.ts";
 import { Table } from "./views/table.ts";
 import { ScrollView } from "./views/scroll-view.ts";
 import { LogView } from "./views/log-view.ts";
+import { type DetailHost, type LogSpec, DetailView } from "./views/detail-view.ts";
 import { Selector } from "./views/selector.ts";
 
 const ENABLE_MOUSE = "\x1b[?1000h\x1b[?1006h";
 const DISABLE_MOUSE = "\x1b[?1000l\x1b[?1006l";
 const REFRESH_MS = 5000;
 
-type Mode = "list" | "detail" | "logs" | "select" | "confirm";
+type Mode = "list" | "detail" | "logs" | "drill" | "select" | "confirm";
 
-export class KubeApp implements Component {
+export class KubeApp implements Component, DetailHost {
     private tui = new TUI(new ProcessTerminal());
     private quitting = false;
 
@@ -44,6 +47,7 @@ export class KubeApp implements Component {
     private detail?: ScrollView;
     private logView?: LogView;
     private logProc?: ReturnType<typeof Bun.spawn>;
+    private drillStack: DetailView[] = [];
     private selector?: Selector;
     private confirm?: { message: string; action: () => Promise<string> };
 
@@ -79,6 +83,8 @@ export class KubeApp implements Component {
         this.timer = setInterval(() => {
             if (this.mode === "list") {
                 void this.refresh(true);
+            } else if (this.mode === "drill" && this.drillStack.length > 0) {
+                void this.drillStack[this.drillStack.length - 1].refresh();
             }
         }, REFRESH_MS);
     }
@@ -177,6 +183,9 @@ export class KubeApp implements Component {
             case "logs":
                 this.logView?.handleInput(data);
                 break;
+            case "drill":
+                this.drillStack[this.drillStack.length - 1]?.handleInput(data);
+                break;
             case "confirm":
                 this.handleConfirmInput(data);
                 break;
@@ -203,12 +212,16 @@ export class KubeApp implements Component {
                 this.filter = "";
                 this.rebuild();
             }
-        } else if (matchesKey(data, "enter") || matchesKey(data, "y")) {
-            void this.showText("yaml");
+        } else if (matchesKey(data, "enter")) {
+            this.openDetail();
+        } else if (matchesKey(data, "y")) {
+            const ref = this.selectedRef();
+            if (ref) void this.showText(ref, "yaml");
         } else if (matchesKey(data, "d")) {
-            void this.showText("describe");
+            const ref = this.selectedRef();
+            if (ref) void this.showText(ref, "describe");
         } else if (matchesKey(data, "l")) {
-            this.streamLogs();
+            this.logsForSelected();
         } else if (matchesKey(data, "x")) {
             this.promptDelete();
         } else if (data === ":") {
@@ -275,18 +288,15 @@ export class KubeApp implements Component {
         };
     }
 
-    private async showText(what: "yaml" | "describe"): Promise<void> {
-        const ref = this.selectedRef();
-        if (!ref) {
-            return;
-        }
+    private async showText(ref: ResourceRef, what: "yaml" | "describe"): Promise<void> {
+        const prev = this.mode;
         this.status = `loading ${what}…`;
         this.tui.requestRender();
         try {
             const text = what === "yaml" ? await getYaml(ref) : await describe(ref);
             this.detail = new ScrollView(`${ref.name} · ${what}`, text || "(empty)");
             this.detail.onBack = () => {
-                this.mode = "list";
+                this.mode = prev;
                 this.detail = undefined;
                 this.tui.requestRender();
             };
@@ -299,31 +309,117 @@ export class KubeApp implements Component {
     }
 
     /** Stream `kubectl logs -f` into a live, auto-following pane. */
-    private streamLogs(): void {
-        const ref = this.selectedRef();
-        if (!ref || this.kind.name !== "pods") {
-            this.status = "logs are only available for pods";
-            return;
-        }
-
-        const view = new LogView(`${ref.name} · logs (live)`);
+    openLogs(spec: LogSpec): void {
+        const prev = this.mode;
+        const view = new LogView(spec.title);
         view.onBack = () => {
             this.stopLogs();
             this.logView = undefined;
-            this.mode = "list";
+            this.mode = prev;
             this.tui.requestRender();
         };
         this.logView = view;
         this.mode = "logs";
 
-        const args = ["--context", ref.context, "logs", ref.name, "-f", "--tail=500", "--all-containers=true"];
-        if (ref.namespace) {
-            args.push("-n", ref.namespace);
+        const args = ["--context", spec.context, "logs", "-f", "--tail=500", "--all-containers=true"];
+        if (spec.podName) {
+            args.push(spec.podName);
+        }
+        if (spec.selector) {
+            args.push("-l", spec.selector, "--prefix", "--max-log-requests=20");
+        }
+        if (spec.namespace) {
+            args.push("-n", spec.namespace);
         }
         const proc = Bun.spawn(["kubectl", ...args], { stdout: "pipe", stderr: "pipe" });
         this.logProc = proc;
         void this.pumpStream(proc, view);
         this.tui.requestRender();
+    }
+
+    /** Logs for the selected list row: pod directly, or all pods of a workload. */
+    private logsForSelected(): void {
+        const obj = this.visible[this.table.selected()];
+        const name = obj?.metadata?.name;
+        if (!obj || !name) {
+            return;
+        }
+        if (this.kind.name === "pods") {
+            this.openLogs({ context: this.context, namespace: obj.metadata?.namespace, podName: name, title: `${name} · logs (live)` });
+            return;
+        }
+        if (WORKLOAD_KINDS.has(this.kind.name)) {
+            const selector = workloadSelector(obj);
+            if (selector) {
+                this.openLogs({
+                    context: this.context,
+                    namespace: obj.metadata?.namespace,
+                    selector,
+                    title: `${name} · logs (all pods)`,
+                });
+                return;
+            }
+        }
+        this.status = "no logs for this resource";
+    }
+
+    /** Open the Lens/Aptakube-style detail dashboard for the selected row. */
+    private openDetail(): void {
+        const obj = this.visible[this.table.selected()];
+        if (!obj?.metadata?.name) {
+            return;
+        }
+        const isWorkload = WORKLOAD_KINDS.has(this.kind.name);
+        if (!isWorkload && this.kind.name !== "pods") {
+            // No pods to drill into — fall back to YAML for other kinds.
+            const ref = this.selectedRef();
+            if (ref) void this.showText(ref, "yaml");
+            return;
+        }
+        this.pushDetail(new DetailView(this, obj, this.kind.name, this.context, isWorkload));
+    }
+
+    private pushDetail(view: DetailView): void {
+        this.drillStack.push(view);
+        this.mode = "drill";
+        void view.refresh();
+        this.tui.requestRender();
+    }
+
+    // ── DetailHost ───────────────────────────────────────────────────────────
+    requestRender(): void {
+        this.tui.requestRender();
+    }
+
+    back(): void {
+        this.drillStack.pop();
+        this.mode = this.drillStack.length > 0 ? "drill" : "list";
+        this.tui.requestRender();
+    }
+
+    openYaml(ref: ResourceRef): void {
+        void this.showText(ref, "yaml");
+    }
+
+    openDescribe(ref: ResourceRef): void {
+        void this.showText(ref, "describe");
+    }
+
+    openPod(pod: K8sObject): void {
+        if (pod.metadata?.name) {
+            this.pushDetail(new DetailView(this, pod, "pods", this.context, false));
+        }
+    }
+
+    async fetchPods(
+        namespace: string | undefined,
+        selector: string,
+    ): Promise<{ pods: K8sObject[]; top: Map<string, PodMetrics> }> {
+        const [pods, top] = await Promise.all([
+            listResources("pods", { context: this.context, namespace, labelSelector: selector }),
+            topPods(this.context, namespace, selector),
+        ]);
+        return { pods, top };
     }
 
     private async pumpStream(proc: ReturnType<typeof Bun.spawn>, view: LogView): Promise<void> {
@@ -437,6 +533,8 @@ export class KubeApp implements Component {
             lines = fill(this.detail.render(width), width);
         } else if (this.mode === "logs" && this.logView) {
             lines = fill(this.logView.render(width), width);
+        } else if (this.mode === "drill" && this.drillStack.length > 0) {
+            lines = fill(this.drillStack[this.drillStack.length - 1].render(width), width);
         } else {
             const header = pad(this.headerLine(), width);
             const rule = ui.rule("─".repeat(width));
@@ -475,7 +573,7 @@ export class KubeApp implements Component {
         if (this.status) {
             return `  ${ui.dim(this.status)}`;
         }
-        return `  ${ui.accent("[:] resources")}  ${ui.footer("n ns · c ctx · / filter · enter yaml · d describe · l logs · x del · R refresh · ctrl+c quit")}`;
+        return `  ${ui.accent("[:] resources")}  ${ui.footer("enter open · n ns · c ctx · / filter · y yaml · d describe · l logs · x del · R refresh · ctrl+c quit")}`;
     }
 }
 

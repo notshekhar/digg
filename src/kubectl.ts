@@ -70,6 +70,7 @@ export interface ListOptions {
     context: string;
     namespace?: string; // undefined → all namespaces (-A)
     clusterScoped?: boolean;
+    labelSelector?: string;
 }
 
 export async function listResources(kind: string, opts: ListOptions): Promise<K8sObject[]> {
@@ -81,9 +82,47 @@ export async function listResources(kind: string, opts: ListOptions): Promise<K8
             args.push("-A");
         }
     }
+    if (opts.labelSelector) {
+        args.push("-l", opts.labelSelector);
+    }
     const out = await runOrThrow(args, opts.context);
     const parsed = JSON.parse(out) as { items?: K8sObject[] };
     return parsed.items ?? [];
+}
+
+export interface PodMetrics {
+    cpu: string;
+    memory: string;
+}
+
+/**
+ * Per-pod CPU/memory via `kubectl top`. Returns an empty map when metrics
+ * aren't available (no metrics-server) rather than throwing.
+ */
+export async function topPods(
+    context: string,
+    namespace: string | undefined,
+    labelSelector?: string,
+): Promise<Map<string, PodMetrics>> {
+    const args = ["top", "pods", "--no-headers"];
+    if (namespace) {
+        args.push("-n", namespace);
+    }
+    if (labelSelector) {
+        args.push("-l", labelSelector);
+    }
+    const result = await run(args, context);
+    const map = new Map<string, PodMetrics>();
+    if (result.code !== 0) {
+        return map;
+    }
+    for (const line of result.stdout.split("\n")) {
+        const cols = line.trim().split(/\s+/);
+        if (cols.length >= 3) {
+            map.set(cols[0], { cpu: cols[1], memory: cols[2] });
+        }
+    }
+    return map;
 }
 
 export interface ResourceRef {
