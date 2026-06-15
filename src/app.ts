@@ -55,7 +55,10 @@ export class DiggApp implements Component, DetailHost {
     private status = "connecting…";
     private timer?: ReturnType<typeof setInterval>;
 
-    private mouseEnabled = true;
+    // Mouse capture is OFF by default so native text selection / copy works
+    // everywhere (capturing the mouse disables the terminal's own selection).
+    // Press `m` to enable wheel-scrolling when you want it.
+    private mouseEnabled = false;
 
     // ── lifecycle ──────────────────────────────────────────────────────────
     async start(): Promise<void> {
@@ -107,14 +110,6 @@ export class DiggApp implements Component, DetailHost {
         process.stdout.write(this.mouseEnabled ? ENABLE_MOUSE : DISABLE_MOUSE);
         return this.mouseEnabled;
     }
-
-    private ensureMouse(): void {
-        if (!this.mouseEnabled) {
-            this.mouseEnabled = true;
-            process.stdout.write(ENABLE_MOUSE);
-        }
-    }
-
     private quit(): void {
         if (this.quitting) {
             return;
@@ -262,6 +257,8 @@ export class DiggApp implements Component, DetailHost {
             this.openContextSelector();
         } else if (matchesKey(data, "shift+r")) {
             void this.refresh(false);
+        } else if (matchesKey(data, "m")) {
+            this.toggleMouse();
         }
     }
 
@@ -331,7 +328,6 @@ export class DiggApp implements Component, DetailHost {
                 this.detail.onEdit = () => this.editResource(ref);
             }
             this.detail.onBack = () => {
-                this.ensureMouse();
                 this.mode = prev;
                 this.detail = undefined;
                 this.tui.requestRender();
@@ -383,7 +379,6 @@ export class DiggApp implements Component, DetailHost {
         view.onToggleMouse = () => this.toggleMouse();
         view.onBack = () => {
             this.stopLogs();
-            this.ensureMouse();
             this.logView = undefined;
             this.mode = prev;
             this.tui.requestRender();
@@ -502,7 +497,6 @@ export class DiggApp implements Component, DetailHost {
             this.detail = new ScrollView(`${name} · revisions`, text || "(no revisions found)");
             this.detail.onToggleMouse = () => this.toggleMouse();
             this.detail.onBack = () => {
-                this.ensureMouse();
                 this.mode = prev;
                 this.detail = undefined;
                 this.tui.requestRender();
@@ -696,7 +690,8 @@ export class DiggApp implements Component, DetailHost {
         if (this.status) {
             return `  ${ui.dim(this.status)}`;
         }
-        return `  ${ui.accent("[:] resources")}  ${ui.footer("enter open · n ns · c ctx · / filter · y yaml · d describe · l logs · x del · R refresh · ctrl+c quit")}`;
+        const wheel = this.mouseEnabled ? ui.dim("  · m wheel:on") : ui.dim("  · m wheel");
+        return `  ${ui.accent("[:] resources")}  ${ui.footer("enter open · n ns · c ctx · / filter · y yaml · d describe · l logs · x del · R refresh · ctrl+c quit")}${wheel}`;
     }
 }
 

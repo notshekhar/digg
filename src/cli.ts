@@ -16,12 +16,16 @@ Options:
 
 Interactive keys:
   ↑/↓ or j/k    move          g/G    top/bottom
-  :             switch kind   n      switch namespace
-  c             switch ctx    /      filter
-  enter / y     view YAML     d      describe
-  l             logs (pods)   x      delete (confirm)
-  R             refresh       esc    back / clear filter
-  ctrl+c        quit`;
+  enter         open detail   :      switch kind
+  n             namespace     c      context
+  /             filter        y      YAML (e to edit)
+  d             describe      l      logs (live)
+  r             revisions     x      delete (confirm)
+  R             refresh       m      toggle mouse wheel
+  esc           back          ctrl+c quit
+
+Mouse capture is off by default so you can select/copy text normally;
+press m to enable wheel-scrolling.`;
 
 function main(): void {
     const args = process.argv.slice(2);

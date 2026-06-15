@@ -14,7 +14,7 @@ export class ScrollView {
     private offset = 0;
     private hoffset = 0;
     private margin = 1;
-    private mouseOn = true;
+    private mouseOn = false;
 
     public onBack?: () => void;
     public onEdit?: () => void;
@@ -110,12 +110,12 @@ export class ScrollView {
         const percent = Math.round((Math.min(this.offset + height, total) / total) * 100);
         const col = this.hoffset > 0 ? ` ·  ←${this.hoffset}` : "";
 
-        const mouse = this.mouseOn ? "" : `  ${ui.accent("mouse off — select to copy")}`;
+        const mouse = this.mouseOn ? `  ${ui.accent("wheel-scroll on")}` : `  ${ui.dim("drag to select/copy")}`;
         const header = padLine(`${ui.headerBar(` ${this.title} `)}${mouse}`, width);
         const rule = ui.rule("─".repeat(width));
         const editHint = this.onEdit ? " · e edit" : "";
         const footer = padLine(
-            `${gutter}${ui.footer(`↑/↓ scroll · ←/→ pan · g/G top/bottom${editHint} · m select · esc back`)}  ${ui.accent(`${percent}%${col}`)}`,
+            `${gutter}${ui.footer(`↑/↓ scroll · ←/→ pan · g/G top/bottom${editHint} · m wheel · esc back`)}  ${ui.accent(`${percent}%${col}`)}`,
             width,
         );
         return [header, rule, ...body, footer];

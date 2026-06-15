@@ -18,7 +18,7 @@ export class LogView {
     private follow = true;
     private margin = 1;
     private pending = "";
-    private mouseOn = true;
+    private mouseOn = false;
 
     public onBack?: () => void;
     /** Toggle mouse capture; returns whether capture is now on. */
@@ -77,7 +77,7 @@ export class LogView {
             this.offset = this.maxOffset();
         } else if (matchesKey(data, "left") || matchesKey(data, "h")) {
             this.hoffset = Math.max(0, this.hoffset - HSTEP);
-        } else if (matchesKey(data, "right")) {
+        } else if (matchesKey(data, "right") || matchesKey(data, "l")) {
             this.hoffset += HSTEP;
         } else if (matchesKey(data, "f")) {
             this.follow = !this.follow;
@@ -121,11 +121,11 @@ export class LogView {
         }
 
         const state = this.follow ? ui.accent("following") : ui.dim("paused");
-        const mouse = this.mouseOn ? "" : `  ${ui.accent("mouse off — select to copy")}`;
+        const mouse = this.mouseOn ? `  ${ui.accent("wheel-scroll on")}` : `  ${ui.dim("drag to select/copy")}`;
         const header = pad(`${ui.headerBar(` ${this.title} `)}  ${state}${mouse}`, width);
         const rule = ui.rule("─".repeat(width));
         const footer = pad(
-            `${gutter}${ui.footer("↑/↓ scroll · ←/→ pan · f follow · G live · m select · esc back")}`,
+            `${gutter}${ui.footer("↑/↓ scroll · ←/→ pan · f follow · G live · m wheel · esc back")}`,
             width,
         );
         return [header, rule, ...body, footer];
