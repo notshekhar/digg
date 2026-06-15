@@ -8,15 +8,21 @@ const MAX_LINES = 5000;
  * While "following", the view sticks to the bottom; scrolling up detaches
  * follow, and `G`/End re-attaches it.
  */
+const HSTEP = 8;
+
 export class LogView {
     private title: string;
     private lines: string[] = [];
     private offset = 0;
+    private hoffset = 0;
     private follow = true;
     private margin = 1;
     private pending = "";
+    private mouseOn = true;
 
     public onBack?: () => void;
+    /** Toggle mouse capture; returns whether capture is now on. */
+    public onToggleMouse?: () => boolean;
 
     constructor(title: string) {
         this.title = title;
@@ -69,11 +75,17 @@ export class LogView {
         } else if (matchesKey(data, "shift+g") || matchesKey(data, "end")) {
             this.follow = true;
             this.offset = this.maxOffset();
+        } else if (matchesKey(data, "left") || matchesKey(data, "h")) {
+            this.hoffset = Math.max(0, this.hoffset - HSTEP);
+        } else if (matchesKey(data, "right")) {
+            this.hoffset += HSTEP;
         } else if (matchesKey(data, "f")) {
             this.follow = !this.follow;
             if (this.follow) {
                 this.offset = this.maxOffset();
             }
+        } else if (matchesKey(data, "m")) {
+            this.mouseOn = this.onToggleMouse?.() ?? this.mouseOn;
         } else if (matchesKey(data, "escape") || matchesKey(data, "q")) {
             this.onBack?.();
             return;
@@ -101,16 +113,21 @@ export class LogView {
         this.clamp();
         const height = this.viewportHeight();
         const gutter = " ".repeat(this.margin);
+        const colWidth = Math.max(1, width - this.margin);
         const window = this.lines.slice(this.offset, this.offset + height);
-        const body = window.map((line) => `${gutter}${truncateToWidth(line, width - this.margin)}`);
+        const body = window.map((line) => `${gutter}${truncateToWidth(line.slice(this.hoffset), colWidth)}`);
         while (body.length < height) {
             body.push("");
         }
 
         const state = this.follow ? ui.accent("following") : ui.dim("paused");
-        const header = pad(`${ui.headerBar(` ${this.title} `)}  ${state}`, width);
+        const mouse = this.mouseOn ? "" : `  ${ui.accent("mouse off — select to copy")}`;
+        const header = pad(`${ui.headerBar(` ${this.title} `)}  ${state}${mouse}`, width);
         const rule = ui.rule("─".repeat(width));
-        const footer = pad(`${gutter}${ui.footer("↑/↓ scroll · f follow · G live · esc back")}`, width);
+        const footer = pad(
+            `${gutter}${ui.footer("↑/↓ scroll · ←/→ pan · f follow · G live · m select · esc back")}`,
+            width,
+        );
         return [header, rule, ...body, footer];
     }
 }

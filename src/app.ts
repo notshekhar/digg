@@ -13,7 +13,7 @@ import {
     listResources,
     topPods,
 } from "./kubectl.ts";
-import { type KindDef, KINDS, WORKLOAD_KINDS, findKind, workloadSelector } from "./format.ts";
+import { type KindDef, KINDS, WORKLOAD_KINDS, age, findKind, workloadSelector } from "./format.ts";
 import { ui } from "./theme.ts";
 import { Table } from "./views/table.ts";
 import { ScrollView } from "./views/scroll-view.ts";
@@ -55,13 +55,26 @@ export class DiggApp implements Component, DetailHost {
     private status = "connecting…";
     private timer?: ReturnType<typeof setInterval>;
 
+    private mouseEnabled = true;
+
     // ── lifecycle ──────────────────────────────────────────────────────────
     async start(): Promise<void> {
         if (!(await isKubectlAvailable())) {
             process.stderr.write("digg: kubectl not found on PATH. Install kubectl and try again.\n");
             process.exit(1);
         }
+        process.on("SIGINT", () => this.quit());
+        // Always restore mouse reporting, even if pi-tui throws mid-render —
+        // otherwise the terminal keeps emitting raw mouse escape sequences.
+        process.on("exit", () => process.stdout.write(DISABLE_MOUSE));
 
+        this.mountTui();
+        this.startTimer();
+        await this.init();
+    }
+
+    /** Attach to the terminal. Also used to re-attach after running $EDITOR. */
+    private mountTui(): void {
         this.tui.addInputListener((data) => {
             if (matchesKey(data, "ctrl+c") || data === "\x03") {
                 this.quit();
@@ -69,18 +82,16 @@ export class DiggApp implements Component, DetailHost {
             }
             return undefined;
         });
-        process.on("SIGINT", () => this.quit());
-        // Always restore mouse reporting, even if pi-tui throws mid-render —
-        // otherwise the terminal keeps emitting raw mouse escape sequences.
-        process.on("exit", () => process.stdout.write(DISABLE_MOUSE));
-
-        process.stdout.write(ENABLE_MOUSE);
+        if (this.mouseEnabled) {
+            process.stdout.write(ENABLE_MOUSE);
+        }
         this.tui.addChild(this);
         this.tui.setFocus(this);
         this.tui.start();
         this.tui.requestRender();
+    }
 
-        await this.init();
+    private startTimer(): void {
         this.timer = setInterval(() => {
             if (this.mode === "list") {
                 void this.refresh(true);
@@ -88,6 +99,20 @@ export class DiggApp implements Component, DetailHost {
                 void this.drillStack[this.drillStack.length - 1].refresh();
             }
         }, REFRESH_MS);
+    }
+
+    /** Toggle mouse capture so the user can select/copy text natively. */
+    private toggleMouse(): boolean {
+        this.mouseEnabled = !this.mouseEnabled;
+        process.stdout.write(this.mouseEnabled ? ENABLE_MOUSE : DISABLE_MOUSE);
+        return this.mouseEnabled;
+    }
+
+    private ensureMouse(): void {
+        if (!this.mouseEnabled) {
+            this.mouseEnabled = true;
+            process.stdout.write(ENABLE_MOUSE);
+        }
     }
 
     private quit(): void {
@@ -300,7 +325,13 @@ export class DiggApp implements Component, DetailHost {
         try {
             const text = what === "yaml" ? await getYaml(ref) : await describe(ref);
             this.detail = new ScrollView(`${ref.name} · ${what}`, text || "(empty)");
+            this.detail.onToggleMouse = () => this.toggleMouse();
+            if (what === "yaml") {
+                // Editable: e launches `kubectl edit` ($EDITOR) and applies on save.
+                this.detail.onEdit = () => this.editResource(ref);
+            }
             this.detail.onBack = () => {
+                this.ensureMouse();
                 this.mode = prev;
                 this.detail = undefined;
                 this.tui.requestRender();
@@ -313,12 +344,46 @@ export class DiggApp implements Component, DetailHost {
         this.tui.requestRender();
     }
 
+    /**
+     * Edit a resource with `kubectl edit` — opens the live YAML in $EDITOR and
+     * applies it on save. The TUI is suspended for the editor, then re-mounted.
+     */
+    private editResource(ref: ResourceRef): void {
+        if (this.timer) {
+            clearInterval(this.timer);
+        }
+        process.stdout.write(DISABLE_MOUSE);
+        this.tui.stop();
+
+        const args = ["--context", ref.context, "edit", ref.kind, ref.name];
+        if (ref.namespace) {
+            args.push("-n", ref.namespace);
+        }
+        try {
+            // kubectl uses KUBE_EDITOR/EDITOR; inherit the tty for the editor.
+            Bun.spawnSync(["kubectl", ...args], { stdin: "inherit", stdout: "inherit", stderr: "inherit", env: process.env });
+        } catch {
+            // fall through and restore the UI regardless
+        }
+
+        // Re-mount a fresh TUI (pi-tui has no resume) and return to the list/drill.
+        this.detail = undefined;
+        this.mode = this.drillStack.length > 0 ? "drill" : "list";
+        this.tui = new TUI(new ProcessTerminal());
+        this.mountTui();
+        this.startTimer();
+        this.status = "applied edits (if saved)";
+        void this.refresh(false);
+    }
+
     /** Stream `kubectl logs -f` into a live, auto-following pane. */
     openLogs(spec: LogSpec): void {
         const prev = this.mode;
         const view = new LogView(spec.title);
+        view.onToggleMouse = () => this.toggleMouse();
         view.onBack = () => {
             this.stopLogs();
+            this.ensureMouse();
             this.logView = undefined;
             this.mode = prev;
             this.tui.requestRender();
@@ -416,6 +481,40 @@ export class DiggApp implements Component, DetailHost {
         }
     }
 
+    /** Show a deployment's rollout history (its ReplicaSets, newest first). */
+    async openRevisions(obj: K8sObject, selector: string): Promise<void> {
+        const prev = this.mode;
+        const name = obj.metadata?.name ?? "";
+        this.status = "loading revisions…";
+        this.tui.requestRender();
+        try {
+            const all = await listResources("replicasets", {
+                context: this.context,
+                namespace: obj.metadata?.namespace,
+                labelSelector: selector,
+            });
+            const owned = all.filter((rs) =>
+                (rs.metadata as { ownerReferences?: { kind?: string; name?: string }[] })?.ownerReferences?.some(
+                    (o) => o.kind === "Deployment" && o.name === name,
+                ),
+            );
+            const text = formatRevisions(owned);
+            this.detail = new ScrollView(`${name} · revisions`, text || "(no revisions found)");
+            this.detail.onToggleMouse = () => this.toggleMouse();
+            this.detail.onBack = () => {
+                this.ensureMouse();
+                this.mode = prev;
+                this.detail = undefined;
+                this.tui.requestRender();
+            };
+            this.mode = "detail";
+            this.status = "";
+        } catch (err) {
+            this.status = errorText(err);
+        }
+        this.tui.requestRender();
+    }
+
     async fetchPods(
         namespace: string | undefined,
         selector: string,
@@ -466,7 +565,7 @@ export class DiggApp implements Component, DetailHost {
             return;
         }
         this.confirm = {
-            message: `Delete ${this.kind.name.replace(/s$/, "")} ${ref.name}? (y/N)`,
+            message: `Delete ${this.kind.name.replace(/s$/, "")} "${ref.name}"?`,
             action: () => deleteResource(ref),
         };
         this.mode = "confirm";
@@ -551,21 +650,29 @@ export class DiggApp implements Component, DetailHost {
             lines = fill(this.logView.render(width), width);
         } else if (this.mode === "drill" && this.drillStack.length > 0) {
             lines = fill(this.drillStack[this.drillStack.length - 1].render(width), width);
+        } else if (this.mode === "confirm" && this.confirm) {
+            // Dim the list behind a centered confirmation box.
+            lines = overlayConfirm(this.renderList(width), this.confirm.message, width);
         } else {
-            const header = pad(this.headerLine(), width);
-            const rule = ui.rule("─".repeat(width));
-            const body = this.table.render(width, this.bodyHeight());
-            const footer = pad(this.footerLine(), width);
-            lines = [header, rule, ...body];
-            const total = process.stdout.rows || 24;
-            while (lines.length < total - 1) {
-                lines.push("");
-            }
-            lines.push(footer);
+            lines = this.renderList(width);
         }
         // pi-tui hard-crashes on any line wider than the terminal; truncate as a
         // final safety net so a long footer/row can never take the UI down.
         return lines.map((line) => truncateToWidth(line, width));
+    }
+
+    private renderList(width: number): string[] {
+        const header = pad(this.headerLine(), width);
+        const rule = ui.rule("─".repeat(width));
+        const body = this.table.render(width, this.bodyHeight());
+        const footer = pad(this.footerLine(), width);
+        const lines = [header, rule, ...body];
+        const total = process.stdout.rows || 24;
+        while (lines.length < total - 1) {
+            lines.push("");
+        }
+        lines.push(footer);
+        return lines;
     }
 
     private headerLine(): string {
@@ -609,6 +716,63 @@ function fill(lines: string[], _width: number): string[] {
 function errorText(err: unknown): string {
     const msg = err instanceof Error ? err.message : String(err);
     return msg.split("\n")[0].slice(0, 200);
+}
+
+/** Splice a centered, red confirmation box over the (dimmed) base screen. */
+function overlayConfirm(base: string[], message: string, width: number): string[] {
+    const keys = `${ui.danger("[y] delete")}    ${ui.dim("[n / esc] cancel")}`;
+    const content = Math.min(width - 6, Math.max(visibleWidth(message), 24));
+    const boxLine = (inner: string): string => {
+        const padded = inner + " ".repeat(Math.max(0, content - visibleWidth(inner)));
+        return ui.danger("│ ") + padded + ui.danger(" │");
+    };
+    const titleText = " Confirm delete ";
+    const box = [
+        ui.danger(`┌${titleText}${"─".repeat(Math.max(0, content + 2 - titleText.length))}┐`),
+        boxLine(clipPlain(message, content)),
+        boxLine(""),
+        boxLine(center(keys, content)),
+        ui.danger(`└${"─".repeat(content + 2)}┘`),
+    ];
+
+    const lines = [...base];
+    const startRow = Math.max(0, Math.floor((lines.length - box.length) / 2));
+    const leftPad = " ".repeat(Math.max(0, Math.floor((width - (content + 4)) / 2)));
+    box.forEach((line, i) => {
+        if (startRow + i < lines.length) {
+            lines[startRow + i] = leftPad + line;
+        }
+    });
+    return lines;
+}
+
+/** Format a deployment's ReplicaSets as a revisions table (newest first). */
+function formatRevisions(replicaSets: K8sObject[]): string {
+    const rev = (rs: K8sObject): number =>
+        Number((rs.metadata as { annotations?: Record<string, string> })?.annotations?.["deployment.kubernetes.io/revision"] ?? 0);
+    const sorted = [...replicaSets].sort((a, b) => rev(b) - rev(a));
+
+    const lines = ["REVISION   REPLICAS   AGE     IMAGES"];
+    for (const rs of sorted) {
+        const status = rs.status as { replicas?: number; readyReplicas?: number };
+        const containers = (rs.spec as { template?: { spec?: { containers?: { image?: string }[] } } })?.template?.spec
+            ?.containers ?? [];
+        const images = containers.map((c) => c.image ?? "").filter(Boolean).join(", ");
+        const replicas = `${status?.readyReplicas ?? 0}/${status?.replicas ?? 0}`;
+        lines.push(
+            `${String(rev(rs)).padEnd(10)} ${replicas.padEnd(10)} ${age(rs).padEnd(7)} ${images}`,
+        );
+    }
+    return lines.join("\n");
+}
+
+function center(text: string, width: number): string {
+    const left = Math.max(0, Math.floor((width - visibleWidth(text)) / 2));
+    return " ".repeat(left) + text;
+}
+
+function clipPlain(text: string, width: number): string {
+    return text.length <= width ? text : text.slice(0, Math.max(0, width - 1)) + "…";
 }
 
 export function run(): void {

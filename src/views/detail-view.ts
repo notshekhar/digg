@@ -19,6 +19,7 @@ export interface DetailHost {
     openDescribe(ref: ResourceRef): void;
     openLogs(spec: LogSpec): void;
     openPod(pod: K8sObject): void;
+    openRevisions(obj: K8sObject, selector: string): void;
     fetchPods(namespace: string | undefined, selector: string): Promise<{ pods: K8sObject[]; top: Map<string, PodMetrics> }>;
 }
 
@@ -152,6 +153,8 @@ export class DetailView {
             if (pod) {
                 this.host.openPod(pod);
             }
+        } else if (matchesKey(data, "r") && this.kindName === "deployments" && this.selector) {
+            this.host.openRevisions(this.obj, this.selector);
         }
     }
 
@@ -205,8 +208,9 @@ export class DetailView {
         }
         lines.push(...tableLines);
 
+        const revisions = this.kindName === "deployments" ? " · r revisions" : "";
         const hint = this.isWorkload
-            ? "enter/p open pod · y yaml · d describe · l logs (all pods, live) · esc back"
+            ? `enter/p open pod · y yaml · d describe · l logs (all pods, live)${revisions} · esc back`
             : "y yaml · d describe · l logs (live) · esc back";
         lines.push(`  ${ui.footer(hint)}`);
         return lines;
