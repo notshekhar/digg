@@ -162,6 +162,25 @@ export function findKind(name: string): KindDef | undefined {
     return KINDS.find((k) => k.name === name);
 }
 
+/** Format a deployment's ReplicaSets as a revisions table (newest first). */
+export function formatRevisions(replicaSets: K8sObject[]): string {
+    const revisionOf = (rs: K8sObject): number =>
+        Number(
+            (rs.metadata as { annotations?: Record<string, string> })?.annotations?.[
+                "deployment.kubernetes.io/revision"
+            ] ?? 0,
+        );
+    const sorted = [...replicaSets].sort((a, b) => revisionOf(b) - revisionOf(a));
+
+    const lines = ["REVISION   REPLICAS   AGE     IMAGES"];
+    for (const rs of sorted) {
+        const status = rs.status as { replicas?: number; readyReplicas?: number };
+        const replicas = `${status?.readyReplicas ?? 0}/${status?.replicas ?? 0}`;
+        lines.push(`${String(revisionOf(rs)).padEnd(10)} ${replicas.padEnd(10)} ${age(rs).padEnd(7)} ${images(rs)}`);
+    }
+    return lines.join("\n");
+}
+
 /** Kinds that own a set of pods we can drill into. */
 export const WORKLOAD_KINDS = new Set(["deployments", "statefulsets", "daemonsets", "replicasets", "jobs"]);
 

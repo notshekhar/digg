@@ -1,16 +1,9 @@
 import { matchesKey } from "@earendil-works/pi-tui";
 import type { K8sObject, PodMetrics, ResourceRef } from "../kubectl.ts";
 import { findKind, podContainers, workloadSelector, workloadSummary, age } from "../format.ts";
+import type { LogSpec } from "../log-stream.ts";
 import { ui } from "../theme.ts";
 import { Table } from "./table.ts";
-
-export interface LogSpec {
-    context: string;
-    namespace?: string;
-    podName?: string;
-    selector?: string;
-    title: string;
-}
 
 export interface DetailHost {
     requestRender(): void;
