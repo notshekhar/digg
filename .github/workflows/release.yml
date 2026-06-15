@@ -1,0 +1,72 @@
+name: release
+run-name: release ${{ inputs.tag || github.ref_name }} (by @${{ github.actor }})
+
+on:
+    push:
+        tags:
+            - "v*.*.*"
+    workflow_dispatch:
+        inputs:
+            tag:
+                description: "Version tag (e.g. v0.1.5)."
+                required: true
+
+permissions:
+    contents: write
+
+jobs:
+    release:
+        name: build + release
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: latest
+
+            - name: Resolve tag + version
+              id: tag
+              run: |
+                  tag="${{ github.event.inputs.tag }}"
+                  [ -n "$tag" ] || tag="${GITHUB_REF##*/}"
+                  case "$tag" in v*) ;; *) tag="v$tag" ;; esac
+                  echo "tag=$tag" >> "$GITHUB_OUTPUT"
+                  echo "ver=${tag#v}" >> "$GITHUB_OUTPUT"
+
+            - name: Sync package version
+              run: |
+                  bun -e "
+                    const fs = require('fs');
+                    const j = JSON.parse(fs.readFileSync('package.json','utf8'));
+                    j.version = '${{ steps.tag.outputs.ver }}';
+                    fs.writeFileSync('package.json', JSON.stringify(j, null, 4) + '\n');
+                  "
+
+            - run: bun install --frozen-lockfile
+
+            - name: Build binaries
+              run: |
+                  for t in bun-darwin-arm64 bun-darwin-x64 bun-linux-x64 bun-linux-arm64 bun-windows-x64; do
+                    bun build-bin.ts "$t"
+                  done
+
+            - name: Checksums
+              working-directory: dist/bin
+              run: |
+                  : > SHA256SUMS
+                  for f in kube-*.tar.gz; do
+                    sha256sum "$f" >> SHA256SUMS
+                    sha256sum "$f" > "$f.sha256"
+                  done
+                  cat SHA256SUMS
+
+            - name: Create / update GitHub Release
+              uses: softprops/action-gh-release@v2
+              with:
+                  tag_name: ${{ steps.tag.outputs.tag }}
+                  name: ${{ steps.tag.outputs.tag }}
+                  generate_release_notes: true
+                  files: |
+                      dist/bin/kube-*.tar.gz
+                      dist/bin/kube-*.tar.gz.sha256
+                      dist/bin/SHA256SUMS

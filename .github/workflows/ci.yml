@@ -1,0 +1,23 @@
+name: ci
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+
+jobs:
+    check:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: latest
+            - run: bun install --frozen-lockfile
+            - name: Typecheck
+              run: bunx tsc --noEmit
+            - name: Build binary (smoke)
+              run: |
+                  bun build-bin.ts
+                  bin="$(find dist/bin -maxdepth 2 -name kube -type f | head -n1)"
+                  "$bin" --version
