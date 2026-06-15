@@ -6,7 +6,6 @@ import {
     describe,
     getContexts,
     getCurrentContext,
-    getLogs,
     getNamespaces,
     getYaml,
     isKubectlAvailable,
@@ -16,13 +15,14 @@ import { type KindDef, KINDS, findKind } from "./format.ts";
 import { ui } from "./theme.ts";
 import { Table } from "./views/table.ts";
 import { ScrollView } from "./views/scroll-view.ts";
+import { LogView } from "./views/log-view.ts";
 import { Selector } from "./views/selector.ts";
 
 const ENABLE_MOUSE = "\x1b[?1000h\x1b[?1006h";
 const DISABLE_MOUSE = "\x1b[?1000l\x1b[?1006l";
 const REFRESH_MS = 5000;
 
-type Mode = "list" | "detail" | "select" | "confirm";
+type Mode = "list" | "detail" | "logs" | "select" | "confirm";
 
 export class KubeApp implements Component {
     private tui = new TUI(new ProcessTerminal());
@@ -42,6 +42,8 @@ export class KubeApp implements Component {
     private table = new Table();
     private mode: Mode = "list";
     private detail?: ScrollView;
+    private logView?: LogView;
+    private logProc?: ReturnType<typeof Bun.spawn>;
     private selector?: Selector;
     private confirm?: { message: string; action: () => Promise<string> };
 
@@ -89,6 +91,7 @@ export class KubeApp implements Component {
         if (this.timer) {
             clearInterval(this.timer);
         }
+        this.stopLogs();
         process.stdout.write(DISABLE_MOUSE);
         this.tui.stop();
         process.exit(0);
@@ -171,6 +174,9 @@ export class KubeApp implements Component {
             case "detail":
                 this.detail?.handleInput(data);
                 break;
+            case "logs":
+                this.logView?.handleInput(data);
+                break;
             case "confirm":
                 this.handleConfirmInput(data);
                 break;
@@ -202,7 +208,7 @@ export class KubeApp implements Component {
         } else if (matchesKey(data, "d")) {
             void this.showText("describe");
         } else if (matchesKey(data, "l")) {
-            void this.showText("logs");
+            this.streamLogs();
         } else if (matchesKey(data, "x")) {
             this.promptDelete();
         } else if (data === ":") {
@@ -269,7 +275,7 @@ export class KubeApp implements Component {
         };
     }
 
-    private async showText(what: "yaml" | "describe" | "logs"): Promise<void> {
+    private async showText(what: "yaml" | "describe"): Promise<void> {
         const ref = this.selectedRef();
         if (!ref) {
             return;
@@ -277,8 +283,7 @@ export class KubeApp implements Component {
         this.status = `loading ${what}…`;
         this.tui.requestRender();
         try {
-            const text =
-                what === "yaml" ? await getYaml(ref) : what === "describe" ? await describe(ref) : await getLogs(ref);
+            const text = what === "yaml" ? await getYaml(ref) : await describe(ref);
             this.detail = new ScrollView(`${ref.name} · ${what}`, text || "(empty)");
             this.detail.onBack = () => {
                 this.mode = "list";
@@ -291,6 +296,67 @@ export class KubeApp implements Component {
             this.status = errorText(err);
         }
         this.tui.requestRender();
+    }
+
+    /** Stream `kubectl logs -f` into a live, auto-following pane. */
+    private streamLogs(): void {
+        const ref = this.selectedRef();
+        if (!ref || this.kind.name !== "pods") {
+            this.status = "logs are only available for pods";
+            return;
+        }
+
+        const view = new LogView(`${ref.name} · logs (live)`);
+        view.onBack = () => {
+            this.stopLogs();
+            this.logView = undefined;
+            this.mode = "list";
+            this.tui.requestRender();
+        };
+        this.logView = view;
+        this.mode = "logs";
+
+        const args = ["--context", ref.context, "logs", ref.name, "-f", "--tail=500", "--all-containers=true"];
+        if (ref.namespace) {
+            args.push("-n", ref.namespace);
+        }
+        const proc = Bun.spawn(["kubectl", ...args], { stdout: "pipe", stderr: "pipe" });
+        this.logProc = proc;
+        void this.pumpStream(proc, view);
+        this.tui.requestRender();
+    }
+
+    private async pumpStream(proc: ReturnType<typeof Bun.spawn>, view: LogView): Promise<void> {
+        const decoder = new TextDecoder();
+        const consume = async (stream: ReadableStream<Uint8Array> | undefined) => {
+            if (!stream) {
+                return;
+            }
+            for await (const chunk of stream) {
+                // Ignore output from a stream we've since navigated away from.
+                if (this.logView !== view) {
+                    return;
+                }
+                view.append(decoder.decode(chunk, { stream: true }));
+                this.tui.requestRender();
+            }
+        };
+        try {
+            await Promise.all([consume(proc.stdout as ReadableStream<Uint8Array>), consume(proc.stderr as ReadableStream<Uint8Array>)]);
+        } catch {
+            // stream torn down on stop — nothing to do
+        }
+    }
+
+    private stopLogs(): void {
+        if (this.logProc) {
+            try {
+                this.logProc.kill();
+            } catch {
+                // already exited
+            }
+            this.logProc = undefined;
+        }
     }
 
     private promptDelete(): void {
@@ -369,6 +435,8 @@ export class KubeApp implements Component {
             lines = fill(this.selector.render(width), width);
         } else if (this.mode === "detail" && this.detail) {
             lines = fill(this.detail.render(width), width);
+        } else if (this.mode === "logs" && this.logView) {
+            lines = fill(this.logView.render(width), width);
         } else {
             const header = pad(this.headerLine(), width);
             const rule = ui.rule("─".repeat(width));
@@ -407,7 +475,7 @@ export class KubeApp implements Component {
         if (this.status) {
             return `  ${ui.dim(this.status)}`;
         }
-        return `  ${ui.footer(": kind · n ns · c ctx · / filter · enter yaml · d describe · l logs · x del · R refresh · ctrl+c quit")}`;
+        return `  ${ui.accent("[:] resources")}  ${ui.footer("n ns · c ctx · / filter · enter yaml · d describe · l logs · x del · R refresh · ctrl+c quit")}`;
     }
 }
 
