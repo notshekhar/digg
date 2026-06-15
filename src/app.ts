@@ -10,7 +10,7 @@ import {
     listResources,
     topPods,
 } from "./kubectl.ts";
-import { WORKLOAD_KINDS, formatRevisions } from "./format.ts";
+import { WORKLOAD_KINDS, revisionLabel, sortRevisions } from "./format.ts";
 import { ClusterStore } from "./cluster.ts";
 import { type LogSpec, LogController, logSpecFor } from "./log-stream.ts";
 import { ScrollView } from "./views/scroll-view.ts";
@@ -386,7 +386,10 @@ export class DiggApp implements Component, DetailHost {
         }
     }
 
-    /** Show a deployment's rollout history (its ReplicaSets, newest first). */
+    /**
+     * Show a deployment's rollout history as a selectable list of its
+     * ReplicaSets (newest first). Enter drills into the chosen revision.
+     */
     async openRevisions(obj: K8sObject, selector: string): Promise<void> {
         const prev = this.mode;
         const name = obj.metadata?.name ?? "";
@@ -398,16 +401,38 @@ export class DiggApp implements Component, DetailHost {
                 namespace: obj.metadata?.namespace,
                 labelSelector: selector,
             });
-            const owned = all.filter((rs) =>
-                (rs.metadata as { ownerReferences?: { kind?: string; name?: string }[] })?.ownerReferences?.some(
-                    (o) => o.kind === "Deployment" && o.name === name,
+            const owned = sortRevisions(
+                all.filter((rs) =>
+                    (rs.metadata as { ownerReferences?: { kind?: string; name?: string }[] })?.ownerReferences?.some(
+                        (o) => o.kind === "Deployment" && o.name === name,
+                    ),
                 ),
             );
-            this.present(`${name} · revisions`, formatRevisions(owned) || "(no revisions found)", prev);
+            const byName = new Map(owned.map((rs) => [rs.metadata?.name ?? "", rs]));
+            const picker = new Selector(
+                `${name} · revisions`,
+                owned.map((rs) => ({ value: rs.metadata?.name ?? "", label: revisionLabel(rs) })),
+            );
+            picker.onPick = (value) => {
+                const rs = byName.get(value);
+                this.selector = undefined;
+                if (rs) {
+                    this.pushDetail(new DetailView(this, rs, "replicasets", this.store.context, true));
+                } else {
+                    this.mode = prev;
+                }
+            };
+            picker.onCancel = () => {
+                this.selector = undefined;
+                this.mode = prev;
+                this.tui.requestRender();
+            };
+            this.openSelector(picker);
+            this.status = "";
         } catch (err) {
             this.status = errorText(err);
-            this.tui.requestRender();
         }
+        this.tui.requestRender();
     }
 
     async fetchPods(

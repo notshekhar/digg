@@ -162,23 +162,23 @@ export function findKind(name: string): KindDef | undefined {
     return KINDS.find((k) => k.name === name);
 }
 
-/** Format a deployment's ReplicaSets as a revisions table (newest first). */
-export function formatRevisions(replicaSets: K8sObject[]): string {
-    const revisionOf = (rs: K8sObject): number =>
-        Number(
-            (rs.metadata as { annotations?: Record<string, string> })?.annotations?.[
-                "deployment.kubernetes.io/revision"
-            ] ?? 0,
-        );
-    const sorted = [...replicaSets].sort((a, b) => revisionOf(b) - revisionOf(a));
+export function revisionOf(rs: K8sObject): number {
+    return Number(
+        (rs.metadata as { annotations?: Record<string, string> })?.annotations?.["deployment.kubernetes.io/revision"] ??
+            0,
+    );
+}
 
-    const lines = ["REVISION   REPLICAS   AGE     IMAGES"];
-    for (const rs of sorted) {
-        const status = rs.status as { replicas?: number; readyReplicas?: number };
-        const replicas = `${status?.readyReplicas ?? 0}/${status?.replicas ?? 0}`;
-        lines.push(`${String(revisionOf(rs)).padEnd(10)} ${replicas.padEnd(10)} ${age(rs).padEnd(7)} ${images(rs)}`);
-    }
-    return lines.join("\n");
+/** Newest-first ReplicaSets for a deployment. */
+export function sortRevisions(replicaSets: K8sObject[]): K8sObject[] {
+    return [...replicaSets].sort((a, b) => revisionOf(b) - revisionOf(a));
+}
+
+/** One-line summary of a revision (ReplicaSet) for a selectable list. */
+export function revisionLabel(rs: K8sObject): string {
+    const status = rs.status as { replicas?: number; readyReplicas?: number };
+    const replicas = `${status?.readyReplicas ?? 0}/${status?.replicas ?? 0}`;
+    return `rev ${String(revisionOf(rs)).padEnd(4)} ${replicas.padEnd(6)} ${age(rs).padEnd(5)} ${images(rs)}`;
 }
 
 /** Kinds that own a set of pods we can drill into. */
