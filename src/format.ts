@@ -6,10 +6,14 @@ export interface KindDef {
     name: string;
     /** Short label shown in the UI. */
     title: string;
+    /** PascalCase singular Kind (e.g. "Pod") — used for event field selectors. */
+    kind: string;
     clusterScoped?: boolean;
     columns: string[];
     /** Extract cell values (excluding the leading NAMESPACE column). */
     row: (obj: K8sObject) => string[];
+    /** True for kinds discovered at runtime (CRDs etc.) rather than curated. */
+    generic?: boolean;
 }
 
 const NAME = (obj: K8sObject): string => obj.metadata?.name ?? "<none>";
@@ -65,87 +69,267 @@ const deployReady = (obj: K8sObject): string => {
     return `${s?.readyReplicas ?? 0}/${s?.replicas ?? 0}`;
 };
 
+const none = (v: string | undefined | null): string => (v && v.length > 0 ? v : "<none>");
+
+const podNode = (o: K8sObject): string => (o.spec as { nodeName?: string })?.nodeName ?? "";
+const podIP = (o: K8sObject): string => (o.status as { podIP?: string })?.podIP ?? "";
+
+/** kubectl-style pod phase: surfaces waiting/terminated reasons and Terminating. */
+export function podPhase(obj: K8sObject): string {
+    if ((obj.metadata as { deletionTimestamp?: string })?.deletionTimestamp) {
+        return "Terminating";
+    }
+    const status = obj.status as {
+        phase?: string;
+        reason?: string;
+        containerStatuses?: { state?: { waiting?: { reason?: string }; terminated?: { reason?: string } } }[];
+    };
+    for (const cs of status?.containerStatuses ?? []) {
+        const reason = cs.state?.waiting?.reason ?? cs.state?.terminated?.reason;
+        if (reason && reason !== "Completed") {
+            return reason;
+        }
+    }
+    return status?.reason ?? status?.phase ?? "";
+}
+
+function ageFrom(ts?: string): string {
+    if (!ts) return "";
+    return age({ metadata: { creationTimestamp: ts } } as K8sObject);
+}
+
+function servicePorts(o: K8sObject): string {
+    const ports = (o.spec as { ports?: { port?: number; nodePort?: number; protocol?: string }[] })?.ports ?? [];
+    return (
+        ports
+            .map((p) => `${p.port}${p.nodePort ? `:${p.nodePort}` : ""}/${p.protocol ?? "TCP"}`)
+            .join(",") || "<none>"
+    );
+}
+
+function serviceExternalIP(o: K8sObject): string {
+    const spec = o.spec as { type?: string; externalIPs?: string[] };
+    const ingress = (o.status as { loadBalancer?: { ingress?: { ip?: string; hostname?: string }[] } })?.loadBalancer
+        ?.ingress;
+    if (ingress?.length) {
+        return ingress.map((i) => i.ip ?? i.hostname ?? "").filter(Boolean).join(",") || "<pending>";
+    }
+    if (spec?.externalIPs?.length) {
+        return spec.externalIPs.join(",");
+    }
+    return spec?.type === "LoadBalancer" ? "<pending>" : "<none>";
+}
+
+interface IngressRule {
+    host?: string;
+    http?: { paths?: { path?: string; backend?: { service?: { name?: string; port?: { number?: number; name?: string } } } }[] };
+}
+
+function ingressHosts(o: K8sObject): string {
+    const rules = (o.spec as { rules?: IngressRule[] })?.rules ?? [];
+    const hosts = rules.map((r) => r.host).filter(Boolean) as string[];
+    return hosts.length ? [...new Set(hosts)].join(",") : "*";
+}
+
+function ingressAddress(o: K8sObject): string {
+    const ingress = (o.status as { loadBalancer?: { ingress?: { ip?: string; hostname?: string }[] } })?.loadBalancer
+        ?.ingress;
+    return ingress?.map((i) => i.ip ?? i.hostname ?? "").filter(Boolean).join(",") ?? "";
+}
+
+function ingressPorts(o: K8sObject): string {
+    return (o.spec as { tls?: unknown[] })?.tls?.length ? "80, 443" : "80";
+}
+
+function jobCompletions(o: K8sObject): string {
+    const succeeded = (o.status as { succeeded?: number })?.succeeded ?? 0;
+    const completions = (o.spec as { completions?: number })?.completions ?? 1;
+    return `${succeeded}/${completions}`;
+}
+
+function jobDuration(o: K8sObject): string {
+    const s = o.status as { startTime?: string; completionTime?: string };
+    if (!s?.startTime) return "";
+    const end = s.completionTime ? new Date(s.completionTime).getTime() : Date.now();
+    const seconds = Math.max(0, (end - new Date(s.startTime).getTime()) / 1000);
+    if (seconds < 60) return `${Math.floor(seconds)}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+    return `${Math.floor(seconds / 3600)}h`;
+}
+
+export function jobStatus(o: K8sObject): string {
+    const conditions = (o.status as { conditions?: { type?: string; status?: string }[] })?.conditions ?? [];
+    if (conditions.some((c) => c.type === "Complete" && c.status === "True")) return "Complete";
+    if (conditions.some((c) => c.type === "Failed" && c.status === "True")) return "Failed";
+    const active = (o.status as { active?: number })?.active ?? 0;
+    return active > 0 ? "Running" : "Pending";
+}
+
+function cronActive(o: K8sObject): string {
+    return String((o.status as { active?: unknown[] })?.active?.length ?? 0);
+}
+
+export function nodeRoles(o: K8sObject): string {
+    const labels = o.metadata?.labels ?? {};
+    const roles = Object.keys(labels)
+        .filter((k) => k.startsWith("node-role.kubernetes.io/"))
+        .map((k) => k.slice("node-role.kubernetes.io/".length))
+        .filter(Boolean);
+    return roles.length ? roles.sort().join(",") : "<none>";
+}
+
+function nodeVersion(o: K8sObject): string {
+    return (o.status as { nodeInfo?: { kubeletVersion?: string } })?.nodeInfo?.kubeletVersion ?? "";
+}
+
+function nodeInternalIP(o: K8sObject): string {
+    const addrs = (o.status as { addresses?: { type?: string; address?: string }[] })?.addresses ?? [];
+    return addrs.find((a) => a.type === "InternalIP")?.address ?? "";
+}
+
+function nodeReady(o: K8sObject): string {
+    const conditions = (o.status as { conditions?: { type?: string; status?: string }[] })?.conditions ?? [];
+    const ready = conditions.find((c) => c.type === "Ready");
+    if (ready?.status !== "True") return "NotReady";
+    const unschedulable = (o.spec as { unschedulable?: boolean })?.unschedulable;
+    return unschedulable ? "Ready,SchedulingDisabled" : "Ready";
+}
+
+const ACCESS_MODE_ABBR: Record<string, string> = {
+    ReadWriteOnce: "RWO",
+    ReadOnlyMany: "ROX",
+    ReadWriteMany: "RWX",
+    ReadWriteOncePod: "RWOP",
+};
+
+export function pvcAccessModes(o: K8sObject): string {
+    const modes = (o.status as { accessModes?: string[] })?.accessModes ?? (o.spec as { accessModes?: string[] })?.accessModes ?? [];
+    return modes.map((m) => ACCESS_MODE_ABBR[m] ?? m).join(",");
+}
+
+const pvcCapacity = (o: K8sObject): string =>
+    (o.status as { capacity?: { storage?: string } })?.capacity?.storage ?? "";
+const pvcVolume = (o: K8sObject): string => (o.spec as { volumeName?: string })?.volumeName ?? "";
+const pvcStorageClass = (o: K8sObject): string => (o.spec as { storageClassName?: string })?.storageClassName ?? "";
+
 export const KINDS: KindDef[] = [
     {
         name: "pods",
         title: "Pods",
-        columns: ["NAME", "READY", "STATUS", "RESTARTS", "AGE"],
-        row: (o) => [NAME(o), podReady(o), podStatus(o), podRestarts(o), age(o)],
+        kind: "Pod",
+        columns: ["NAME", "READY", "STATUS", "RESTARTS", "IP", "NODE", "AGE"],
+        row: (o) => [NAME(o), podReady(o), podPhase(o), podRestarts(o), none(podIP(o)), none(podNode(o)), age(o)],
     },
     {
         name: "deployments",
         title: "Deployments",
-        columns: ["NAME", "READY", "AGE"],
-        row: (o) => [NAME(o), deployReady(o), age(o)],
+        kind: "Deployment",
+        columns: ["NAME", "READY", "UP-TO-DATE", "AVAILABLE", "AGE"],
+        row: (o) => {
+            const s = o.status as { updatedReplicas?: number; availableReplicas?: number };
+            return [NAME(o), deployReady(o), String(s?.updatedReplicas ?? 0), String(s?.availableReplicas ?? 0), age(o)];
+        },
     },
     {
         name: "statefulsets",
         title: "StatefulSets",
+        kind: "StatefulSet",
         columns: ["NAME", "READY", "AGE"],
         row: (o) => [NAME(o), deployReady(o), age(o)],
     },
     {
         name: "daemonsets",
         title: "DaemonSets",
-        columns: ["NAME", "READY", "AGE"],
+        kind: "DaemonSet",
+        columns: ["NAME", "DESIRED", "READY", "UP-TO-DATE", "AVAILABLE", "AGE"],
         row: (o) => {
-            const s = o.status as { numberReady?: number; desiredNumberScheduled?: number };
-            return [NAME(o), `${s?.numberReady ?? 0}/${s?.desiredNumberScheduled ?? 0}`, age(o)];
+            const s = o.status as {
+                numberReady?: number;
+                desiredNumberScheduled?: number;
+                updatedNumberScheduled?: number;
+                numberAvailable?: number;
+            };
+            return [
+                NAME(o),
+                String(s?.desiredNumberScheduled ?? 0),
+                String(s?.numberReady ?? 0),
+                String(s?.updatedNumberScheduled ?? 0),
+                String(s?.numberAvailable ?? 0),
+                age(o),
+            ];
         },
     },
     {
         name: "services",
         title: "Services",
-        columns: ["NAME", "TYPE", "CLUSTER-IP", "AGE"],
+        kind: "Service",
+        columns: ["NAME", "TYPE", "CLUSTER-IP", "EXTERNAL-IP", "PORTS", "AGE"],
         row: (o) => {
             const s = o.spec as { type?: string; clusterIP?: string };
-            return [NAME(o), s?.type ?? "", s?.clusterIP ?? "", age(o)];
+            return [NAME(o), s?.type ?? "", s?.clusterIP ?? "", serviceExternalIP(o), servicePorts(o), age(o)];
         },
     },
     {
         name: "ingresses",
         title: "Ingresses",
-        columns: ["NAME", "AGE"],
-        row: (o) => [NAME(o), age(o)],
+        kind: "Ingress",
+        columns: ["NAME", "CLASS", "HOSTS", "ADDRESS", "PORTS", "AGE"],
+        row: (o) => [
+            NAME(o),
+            none((o.spec as { ingressClassName?: string })?.ingressClassName),
+            ingressHosts(o),
+            ingressAddress(o),
+            ingressPorts(o),
+            age(o),
+        ],
     },
     {
         name: "configmaps",
         title: "ConfigMaps",
+        kind: "ConfigMap",
         columns: ["NAME", "DATA", "AGE"],
         row: (o) => [NAME(o), String(Object.keys((o.data as object) ?? {}).length), age(o)],
     },
     {
         name: "secrets",
         title: "Secrets",
-        columns: ["NAME", "TYPE", "AGE"],
-        row: (o) => [NAME(o), String(o.type ?? ""), age(o)],
+        kind: "Secret",
+        columns: ["NAME", "TYPE", "DATA", "AGE"],
+        row: (o) => [NAME(o), String(o.type ?? ""), String(Object.keys((o.data as object) ?? {}).length), age(o)],
     },
     {
         name: "jobs",
         title: "Jobs",
-        columns: ["NAME", "AGE"],
-        row: (o) => [NAME(o), age(o)],
+        kind: "Job",
+        columns: ["NAME", "STATUS", "COMPLETIONS", "DURATION", "AGE"],
+        row: (o) => [NAME(o), jobStatus(o), jobCompletions(o), jobDuration(o), age(o)],
     },
     {
         name: "cronjobs",
         title: "CronJobs",
-        columns: ["NAME", "SCHEDULE", "AGE"],
-        row: (o) => [NAME(o), String((o.spec as { schedule?: string })?.schedule ?? ""), age(o)],
+        kind: "CronJob",
+        columns: ["NAME", "SCHEDULE", "SUSPEND", "ACTIVE", "LAST SCHEDULE", "AGE"],
+        row: (o) => [
+            NAME(o),
+            String((o.spec as { schedule?: string })?.schedule ?? ""),
+            String((o.spec as { suspend?: boolean })?.suspend ?? false),
+            cronActive(o),
+            ageFrom((o.status as { lastScheduleTime?: string })?.lastScheduleTime) || "<none>",
+            age(o),
+        ],
     },
     {
         name: "nodes",
         title: "Nodes",
+        kind: "Node",
         clusterScoped: true,
-        columns: ["NAME", "STATUS", "AGE"],
-        row: (o) => {
-            const conditions = (o.status as { conditions?: { type?: string; status?: string }[] })?.conditions ?? [];
-            const ready = conditions.find((c) => c.type === "Ready");
-            return [NAME(o), ready?.status === "True" ? "Ready" : "NotReady", age(o)];
-        },
+        columns: ["NAME", "STATUS", "ROLES", "VERSION", "INTERNAL-IP", "AGE"],
+        row: (o) => [NAME(o), nodeReady(o), nodeRoles(o), nodeVersion(o), nodeInternalIP(o), age(o)],
     },
     {
         name: "namespaces",
         title: "Namespaces",
+        kind: "Namespace",
         clusterScoped: true,
         columns: ["NAME", "STATUS", "AGE"],
         row: (o) => [NAME(o), podStatus(o) || ((o.status as { phase?: string })?.phase ?? ""), age(o)],
@@ -153,13 +337,50 @@ export const KINDS: KindDef[] = [
     {
         name: "persistentvolumeclaims",
         title: "PVCs",
-        columns: ["NAME", "STATUS", "AGE"],
-        row: (o) => [NAME(o), String((o.status as { phase?: string })?.phase ?? ""), age(o)],
+        kind: "PersistentVolumeClaim",
+        columns: ["NAME", "STATUS", "VOLUME", "CAPACITY", "ACCESS", "STORAGECLASS", "AGE"],
+        row: (o) => [
+            NAME(o),
+            String((o.status as { phase?: string })?.phase ?? ""),
+            none(pvcVolume(o)),
+            pvcCapacity(o),
+            pvcAccessModes(o),
+            none(pvcStorageClass(o)),
+            age(o),
+        ],
     },
 ];
 
 export function findKind(name: string): KindDef | undefined {
     return KINDS.find((k) => k.name === name);
+}
+
+/**
+ * Build a generic KindDef for a discovered resource (CRD, RBAC, etc.) that
+ * isn't in the curated set. Columns are minimal — NAME, optional STATUS phase,
+ * AGE — but yaml/describe/edit/delete/events still work, so it's never a dead
+ * end.
+ */
+export function genericKind(d: { name: string; kind: string; namespaced: boolean }): KindDef {
+    const title = d.kind || d.name;
+    return {
+        name: d.name,
+        title,
+        kind: d.kind || title,
+        clusterScoped: !d.namespaced,
+        generic: true,
+        columns: ["NAME", "STATUS", "AGE"],
+        row: (o) => [NAME(o), genericStatus(o), age(o)],
+    };
+}
+
+/** Best-effort one-word status for an unknown kind from common fields. */
+function genericStatus(o: K8sObject): string {
+    const s = o.status as { phase?: string; conditions?: { type?: string; status?: string }[] } | undefined;
+    if (s?.phase) return s.phase;
+    const ready = s?.conditions?.find((c) => c.type === "Ready" || c.type === "Available");
+    if (ready) return ready.status === "True" ? "Ready" : "NotReady";
+    return "";
 }
 
 export function revisionOf(rs: K8sObject): number {

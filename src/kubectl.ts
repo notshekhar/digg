@@ -71,6 +71,7 @@ export interface ListOptions {
     namespace?: string; // undefined → all namespaces (-A)
     clusterScoped?: boolean;
     labelSelector?: string;
+    fieldSelector?: string;
 }
 
 export async function listResources(kind: string, opts: ListOptions): Promise<K8sObject[]> {
@@ -84,6 +85,9 @@ export async function listResources(kind: string, opts: ListOptions): Promise<K8
     }
     if (opts.labelSelector) {
         args.push("-l", opts.labelSelector);
+    }
+    if (opts.fieldSelector) {
+        args.push("--field-selector", opts.fieldSelector);
     }
     const out = await runOrThrow(args, opts.context);
     const parsed = JSON.parse(out) as { items?: K8sObject[] };
@@ -197,4 +201,135 @@ export async function deleteResource(ref: ResourceRef): Promise<string> {
         args.push("-n", ref.namespace);
     }
     return runOrThrow(args, ref.context);
+}
+
+// ── events ─────────────────────────────────────────────────────────────────
+
+export interface K8sEvent {
+    type: string; // Normal | Warning
+    reason: string;
+    message: string;
+    count: number;
+    source: string;
+    lastSeen: string; // ISO timestamp (lastTimestamp or eventTime)
+}
+
+/**
+ * Events for one object, newest-first. We filter with a field selector on the
+ * involved object's *Kind* (PascalCase singular, e.g. "Pod") — not the plural
+ * resource name — and on its name (+ namespace for namespaced kinds).
+ */
+export async function getEvents(ref: ResourceRef, involvedKind: string): Promise<K8sEvent[]> {
+    const selector = [`involvedObject.kind=${involvedKind}`, `involvedObject.name=${ref.name}`];
+    const args = ["get", "events", "-o", "json", "--field-selector", selector.join(",")];
+    if (ref.namespace) {
+        args.push("-n", ref.namespace);
+    } else {
+        args.push("-A");
+    }
+    const result = await run(args, ref.context);
+    if (result.code !== 0) {
+        return [];
+    }
+    const parsed = JSON.parse(result.stdout) as { items?: RawEvent[] };
+    const items = parsed.items ?? [];
+    const events = items.map(normalizeEvent);
+    events.sort((a, b) => new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime());
+    return events;
+}
+
+interface RawEvent {
+    type?: string;
+    reason?: string;
+    message?: string;
+    count?: number;
+    lastTimestamp?: string;
+    eventTime?: string;
+    firstTimestamp?: string;
+    source?: { component?: string; host?: string };
+    reportingComponent?: string;
+}
+
+function normalizeEvent(e: RawEvent): K8sEvent {
+    return {
+        type: e.type ?? "Normal",
+        reason: e.reason ?? "",
+        message: (e.message ?? "").replace(/\s+/g, " ").trim(),
+        count: e.count ?? 1,
+        source: e.source?.component ?? e.reportingComponent ?? "",
+        lastSeen: e.lastTimestamp ?? e.eventTime ?? e.firstTimestamp ?? "",
+    };
+}
+
+// ── write verbs ────────────────────────────────────────────────────────────
+
+export async function scaleResource(ref: ResourceRef, replicas: number): Promise<string> {
+    const args = ["scale", ref.kind, ref.name, `--replicas=${replicas}`];
+    if (ref.namespace) {
+        args.push("-n", ref.namespace);
+    }
+    return runOrThrow(args, ref.context);
+}
+
+export async function rolloutRestart(ref: ResourceRef): Promise<string> {
+    const args = ["rollout", "restart", `${ref.kind}/${ref.name}`];
+    if (ref.namespace) {
+        args.push("-n", ref.namespace);
+    }
+    return runOrThrow(args, ref.context);
+}
+
+export async function setNodeSchedulable(context: string, node: string, schedulable: boolean): Promise<string> {
+    return runOrThrow([schedulable ? "uncordon" : "cordon", node], context);
+}
+
+export async function drainNode(context: string, node: string): Promise<string> {
+    return runOrThrow(
+        ["drain", node, "--ignore-daemonsets", "--delete-emptydir-data", "--force", "--timeout=60s"],
+        context,
+    );
+}
+
+export async function setSuspend(ref: ResourceRef, suspend: boolean): Promise<string> {
+    const args = ["patch", ref.kind, ref.name, "-p", JSON.stringify({ spec: { suspend } })];
+    if (ref.namespace) {
+        args.push("-n", ref.namespace);
+    }
+    return runOrThrow(args, ref.context);
+}
+
+/** Manually trigger a CronJob by creating a one-off Job from it. */
+export async function triggerCronJob(ref: ResourceRef): Promise<string> {
+    const jobName = `${ref.name}-manual-${Date.now().toString(36)}`.slice(0, 63);
+    const args = ["create", "job", jobName, `--from=cronjob/${ref.name}`];
+    if (ref.namespace) {
+        args.push("-n", ref.namespace);
+    }
+    return runOrThrow(args, ref.context);
+}
+
+// ── interactive arg builders (app.ts owns the spawn + TUI suspend/resume) ─────
+
+/** kubectl argv (sans "kubectl") for an interactive shell into a pod container. */
+export function execArgs(ref: ResourceRef, container: string | undefined, shell: string): string[] {
+    const args = ["--context", ref.context];
+    if (ref.namespace) {
+        args.push("-n", ref.namespace);
+    }
+    args.push("exec", "-it", ref.name);
+    if (container) {
+        args.push("-c", container);
+    }
+    args.push("--", shell);
+    return args;
+}
+
+/** kubectl argv (sans "kubectl") for a `port-forward`. mapping is "local:remote". */
+export function portForwardArgs(ref: ResourceRef, mapping: string): string[] {
+    const args = ["--context", ref.context];
+    if (ref.namespace) {
+        args.push("-n", ref.namespace);
+    }
+    args.push("port-forward", `${ref.kind}/${ref.name}`, mapping);
+    return args;
 }

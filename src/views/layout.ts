@@ -29,13 +29,13 @@ export function clipPlain(text: string, width: number): string {
 
 /** Splice a centered, red confirmation box over the base screen lines. */
 export function overlayConfirm(base: string[], message: string, width: number): string[] {
-    const keys = `${ui.danger("[y] delete")}    ${ui.dim("[n / esc] cancel")}`;
+    const keys = `${ui.danger("[y] confirm")}    ${ui.dim("[n / esc] cancel")}`;
     const content = Math.min(width - 6, Math.max(visibleWidth(message), 24));
     const boxLine = (inner: string): string => {
         const padded = inner + " ".repeat(Math.max(0, content - visibleWidth(inner)));
         return ui.danger("│ ") + padded + ui.danger(" │");
     };
-    const titleText = " Confirm delete ";
+    const titleText = " Confirm ";
     const box = [
         ui.danger(`┌${titleText}${"─".repeat(Math.max(0, content + 2 - titleText.length))}┐`),
         boxLine(clipPlain(message, content)),
@@ -44,6 +44,30 @@ export function overlayConfirm(base: string[], message: string, width: number): 
         ui.danger(`└${"─".repeat(content + 2)}┘`),
     ];
 
+    return spliceBox(base, box, content, width);
+}
+
+/** Splice a centered input prompt over the base screen lines. */
+export function overlayPrompt(base: string[], message: string, value: string, width: number): string[] {
+    const content = Math.min(width - 6, Math.max(visibleWidth(message), 32));
+    const boxLine = (inner: string): string => {
+        const padded = inner + " ".repeat(Math.max(0, content - visibleWidth(inner)));
+        return ui.accent("│ ") + padded + ui.accent(" │");
+    };
+    const titleText = " Input ";
+    const input = `${ui.accent("›")} ${value}${ui.accent("▏")}`;
+    const box = [
+        ui.accent(`┌${titleText}${"─".repeat(Math.max(0, content + 2 - titleText.length))}┐`),
+        boxLine(clipPlain(message, content)),
+        boxLine(""),
+        boxLine(input),
+        boxLine(ui.dim("enter confirm · esc cancel")),
+        ui.accent(`└${"─".repeat(content + 2)}┘`),
+    ];
+    return spliceBox(base, box, content, width);
+}
+
+function spliceBox(base: string[], box: string[], content: number, width: number): string[] {
     const lines = [...base];
     const startRow = Math.max(0, Math.floor((lines.length - box.length) / 2));
     const leftPad = " ".repeat(Math.max(0, Math.floor((width - (content + 4)) / 2)));

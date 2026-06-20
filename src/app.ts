@@ -1,16 +1,26 @@
 import { type Component, TUI, ProcessTerminal, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import {
+    type K8sEvent,
     type K8sObject,
     type PodMetrics,
     type ResourceRef,
     applyManifest,
     deleteResource,
     describe,
+    drainNode,
+    execArgs,
+    getEvents,
     getJson,
     getYaml,
     isKubectlAvailable,
     listResources,
+    portForwardArgs,
+    rolloutRestart,
+    scaleResource,
+    setNodeSchedulable,
+    setSuspend,
     topPods,
+    triggerCronJob,
 } from "./kubectl.ts";
 import { WORKLOAD_KINDS, revisionLabel, sortRevisions } from "./format.ts";
 import { ClusterStore } from "./cluster.ts";
@@ -21,16 +31,22 @@ import { Selector } from "./views/selector.ts";
 import { contextSelector, kindSelector, namespaceSelector } from "./views/selectors.ts";
 import { renderList } from "./views/list-view.ts";
 import { VimEditor } from "./views/editor/vim-editor.ts";
-import { fill, overlayConfirm } from "./views/layout.ts";
+import { PortForwardController } from "./port-forward.ts";
+import { WatchController } from "./watch.ts";
+import { fill, overlayConfirm, overlayPrompt } from "./views/layout.ts";
 import { errorText } from "./util.ts";
 import { fromEditableYaml, isSecretOrConfigMap, toEditableYaml } from "./secret-yaml.ts";
 import { getEditorOptions, getLastContext, setEditorOptions } from "./settings.ts";
 
 const ENABLE_MOUSE = "\x1b[?1000h\x1b[?1006h";
 const DISABLE_MOUSE = "\x1b[?1000l\x1b[?1006l";
-const REFRESH_MS = 5000;
+// The list updates live via the watch stream; this timer drives the detail
+// dashboard (which also needs polled `kubectl top` metrics) and a periodic full
+// list resync as a safety net in case the watch drops an event.
+const TICK_MS = 2000;
+const LIST_RESYNC_TICKS = 4; // full list reload every ~8s
 
-type Mode = "list" | "detail" | "logs" | "drill" | "select" | "confirm" | "edit";
+type Mode = "list" | "detail" | "logs" | "drill" | "select" | "confirm" | "edit" | "prompt";
 
 /**
  * Root TUI component and orchestrator. Owns the terminal lifecycle, the active
@@ -62,6 +78,13 @@ export class DiggApp implements Component, DetailHost {
     private drillStack: DetailView[] = [];
     private selector?: Selector;
     private confirm?: { message: string; action: () => Promise<string> };
+    private prompt?: { message: string; value: string; onSubmit: (value: string) => void };
+    /** The mode a confirm/prompt overlay sits on top of (where esc returns). */
+    private overlayReturn: Mode = "list";
+    private afterShell: Mode = "drill";
+    private forwards = new PortForwardController();
+    private watch = new WatchController();
+    private tick = 0;
 
     private filtering = false;
     private status = "connecting…";
@@ -77,13 +100,14 @@ export class DiggApp implements Component, DetailHost {
         // Restore mouse reporting even if pi-tui throws mid-render.
         process.on("exit", () => process.stdout.write(DISABLE_MOUSE));
 
-        this.mountTui();
+        this.wireTui();
+        this.resumeTui();
         this.startTimer();
         await this.init();
     }
 
-    /** Attach to the terminal. Also used to re-attach after running $EDITOR. */
-    private mountTui(): void {
+    /** One-time wiring: listeners + child + focus persist across suspend/resume. */
+    private wireTui(): void {
         this.tui.addInputListener((data) => {
             if (matchesKey(data, "ctrl+c") || data === "\x03") {
                 this.quit();
@@ -91,23 +115,43 @@ export class DiggApp implements Component, DetailHost {
             }
             return undefined;
         });
+        this.tui.addChild(this);
+        this.tui.setFocus(this);
+    }
+
+    /**
+     * Suspend the TUI to hand the raw terminal to a child process (interactive
+     * `kubectl exec`/shell). Stops the refresh timer, releases mouse capture,
+     * and restores cooked mode. Pair with resumeTui().
+     */
+    private suspendTui(): void {
+        if (this.timer) {
+            clearInterval(this.timer);
+            this.timer = undefined;
+        }
+        process.stdout.write(DISABLE_MOUSE);
+        this.tui.stop();
+    }
+
+    /** Re-attach the TUI after start or after a suspend, forcing a clean repaint. */
+    private resumeTui(): void {
         if (this.mouseEnabled) {
             process.stdout.write(ENABLE_MOUSE);
         }
-        this.tui.addChild(this);
-        this.tui.setFocus(this);
         this.tui.start();
-        this.tui.requestRender();
+        this.tui.requestRender(true);
     }
 
     private startTimer(): void {
         this.timer = setInterval(() => {
-            if (this.mode === "list") {
-                void this.reload(true);
-            } else if (this.mode === "drill" && this.drillStack.length > 0) {
+            this.tick++;
+            if (this.mode === "drill" && this.drillStack.length > 0) {
                 void this.drillStack[this.drillStack.length - 1].refresh();
+            } else if (this.mode === "list" && this.tick % LIST_RESYNC_TICKS === 0) {
+                // The watch keeps the list live; this is only a safety resync.
+                void this.reload(true);
             }
-        }, REFRESH_MS);
+        }, TICK_MS);
     }
 
     private toggleMouse(): boolean {
@@ -125,6 +169,11 @@ export class DiggApp implements Component, DetailHost {
             clearInterval(this.timer);
         }
         this.logs.stop();
+        this.forwards.stopAll();
+        this.watch.stop();
+        for (const view of this.drillStack) {
+            view.stop();
+        }
         process.stdout.write(DISABLE_MOUSE);
         this.tui.stop();
         process.exit(0);
@@ -145,6 +194,23 @@ export class DiggApp implements Component, DetailHost {
         this.selector = undefined;
         this.mode = "list";
         await this.reload(false);
+        this.restartWatch();
+    }
+
+    /**
+     * (Re)start the live watch for the current list target. Called whenever the
+     * target changes (cluster / kind / namespace). Watch events upsert into the
+     * store and trigger an immediate re-render, so the list reflects pod churn
+     * the moment the API server reports it.
+     */
+    private restartWatch(): void {
+        this.watch.start(this.store.context, this.store.watchTarget(), {
+            onEvent: (type, obj) => {
+                if (this.store.applyWatchEvent(type, obj)) {
+                    this.tui.requestRender();
+                }
+            },
+        });
     }
 
     /** Re-fetch the current resource list. `silent` skips the loading status. */
@@ -185,11 +251,40 @@ export class DiggApp implements Component, DetailHost {
             case "confirm":
                 this.handleConfirmInput(data);
                 break;
+            case "prompt":
+                this.handlePromptInput(data);
+                break;
             case "list":
                 this.handleListInput(data);
                 break;
         }
         this.tui.requestRender();
+    }
+
+    private handlePromptInput(data: string): void {
+        if (!this.prompt) {
+            return;
+        }
+        if (matchesKey(data, "escape")) {
+            this.prompt = undefined;
+            this.mode = this.overlayReturn;
+        } else if (matchesKey(data, "enter")) {
+            const { value, onSubmit } = this.prompt;
+            this.prompt = undefined;
+            this.mode = this.overlayReturn;
+            onSubmit(value.trim());
+        } else if (matchesKey(data, "backspace")) {
+            this.prompt.value = this.prompt.value.slice(0, -1);
+        } else if (data.length === 1 && data >= " " && data !== "\x7f") {
+            this.prompt.value += data;
+        }
+    }
+
+    /** Open a single-line input overlay; onSubmit fires on enter with the value. */
+    private openPrompt(message: string, initial: string, onSubmit: (value: string) => void): void {
+        this.overlayReturn = this.mode;
+        this.prompt = { message, value: initial, onSubmit };
+        this.mode = "prompt";
     }
 
     private handleListInput(data: string): void {
@@ -219,7 +314,8 @@ export class DiggApp implements Component, DetailHost {
             if (ref) void this.showText(ref, "describe");
         } else if (matchesKey(data, "l")) {
             this.logsForSelected();
-        } else if (matchesKey(data, "x")) {
+        } else if (matchesKey(data, "shift+x")) {
+            // Capital X (not plain x) so a resource can't be deleted by accident.
             this.promptDelete();
         } else if (data === ":") {
             this.openKindSelector();
@@ -231,6 +327,35 @@ export class DiggApp implements Component, DetailHost {
             void this.reload(false);
         } else if (matchesKey(data, "m")) {
             this.toggleMouse();
+        } else {
+            this.handleListAction(data);
+        }
+    }
+
+    /** Resource-specific action keys on the selected list row (mirror the detail dashboard). */
+    private handleListAction(data: string): void {
+        const obj = this.store.selectedObject();
+        const kindName = this.store.kind.name;
+        if (!obj) {
+            return;
+        }
+        if (matchesKey(data, "s") && kindName === "pods") {
+            this.shellIntoPod(obj);
+        } else if (matchesKey(data, "f") && (kindName === "pods" || kindName === "services")) {
+            this.portForward(obj, kindName);
+        } else if (matchesKey(data, "shift+s") && ["deployments", "statefulsets", "replicasets"].includes(kindName)) {
+            this.scaleResource(obj, kindName);
+        } else if (matchesKey(data, "shift+t") && ["deployments", "statefulsets", "daemonsets"].includes(kindName)) {
+            this.restartResource(obj, kindName);
+        } else if (matchesKey(data, "shift+c") && kindName === "nodes") {
+            this.cordonNode(obj, false);
+        } else if (matchesKey(data, "shift+u") && kindName === "nodes") {
+            this.cordonNode(obj, true);
+        } else if (matchesKey(data, "space") && kindName === "cronjobs") {
+            const suspended = (obj.spec as { suspend?: boolean })?.suspend ?? false;
+            this.suspendCronJob(obj, !suspended);
+        } else if (matchesKey(data, "t") && kindName === "cronjobs") {
+            this.triggerCronJob(obj);
         }
     }
 
@@ -250,10 +375,17 @@ export class DiggApp implements Component, DetailHost {
     private handleConfirmInput(data: string): void {
         const action = this.confirm?.action;
         this.confirm = undefined;
-        this.mode = "list";
+        this.mode = this.overlayReturn;
         if (matchesKey(data, "y") && action) {
             void this.runAction(action);
         }
+    }
+
+    /** Open a yes/no confirmation; esc/n returns to the current screen. */
+    private openConfirm(message: string, action: () => Promise<string>): void {
+        this.overlayReturn = this.mode;
+        this.confirm = { message, action };
+        this.mode = "confirm";
     }
 
     private async runAction(action: () => Promise<string>): Promise<void> {
@@ -262,7 +394,12 @@ export class DiggApp implements Component, DetailHost {
         } catch (err) {
             this.status = errorText(err);
         }
-        await this.reload(false);
+        // Refresh whatever we're looking at: a drill-in dashboard or the list.
+        if (this.drillStack.length > 0) {
+            await this.drillStack[this.drillStack.length - 1].refresh();
+        } else {
+            await this.reload(false);
+        }
     }
 
     // ── actions / presenters ─────────────────────────────────────────────────
@@ -349,6 +486,11 @@ export class DiggApp implements Component, DetailHost {
         this.mode = this.afterEdit;
         this.startTimer();
         this.status = "";
+        // Refresh whatever we return to so the just-saved edit shows immediately:
+        // the drill detail (re-fetches its own object) and the underlying list.
+        if (this.drillStack.length > 0) {
+            void this.drillStack[this.drillStack.length - 1].refresh();
+        }
         void this.reload(false);
         this.tui.requestRender();
     }
@@ -373,19 +515,17 @@ export class DiggApp implements Component, DetailHost {
         if (!obj?.metadata?.name) {
             return;
         }
-        const isWorkload = WORKLOAD_KINDS.has(this.store.kind.name);
-        if (!isWorkload && this.store.kind.name !== "pods") {
-            const ref = this.store.selectedRef();
-            if (ref) void this.showText(ref, "yaml");
-            return;
-        }
-        this.pushDetail(new DetailView(this, obj, this.store.kind.name, this.store.context, isWorkload));
+        const kind = this.store.kind;
+        const isWorkload = WORKLOAD_KINDS.has(kind.name);
+        this.pushDetail(new DetailView(this, obj, kind.name, kind.kind, this.store.context, isWorkload));
     }
 
     private pushDetail(view: DetailView): void {
+        // Pause the view being covered so only the visible one holds a watch.
+        this.drillStack[this.drillStack.length - 1]?.stop();
         this.drillStack.push(view);
         this.mode = "drill";
-        void view.refresh();
+        view.start();
         this.tui.requestRender();
     }
 
@@ -395,8 +535,14 @@ export class DiggApp implements Component, DetailHost {
     }
 
     back(): void {
-        this.drillStack.pop();
-        this.mode = this.drillStack.length > 0 ? "drill" : "list";
+        this.drillStack.pop()?.stop();
+        const top = this.drillStack[this.drillStack.length - 1];
+        if (top) {
+            this.mode = "drill";
+            top.start(); // resume its watch + refresh
+        } else {
+            this.mode = "list";
+        }
         this.tui.requestRender();
     }
 
@@ -416,8 +562,152 @@ export class DiggApp implements Component, DetailHost {
 
     openPod(pod: K8sObject): void {
         if (pod.metadata?.name) {
-            this.pushDetail(new DetailView(this, pod, "pods", this.store.context, false));
+            this.pushDetail(new DetailView(this, pod, "pods", "Pod", this.store.context, false));
         }
+    }
+
+    openResource(obj: K8sObject, kindName: string, singular: string): void {
+        if (obj.metadata?.name) {
+            const isWorkload = WORKLOAD_KINDS.has(kindName);
+            this.pushDetail(new DetailView(this, obj, kindName, singular, this.store.context, isWorkload));
+        }
+    }
+
+    openText(title: string, text: string): void {
+        this.present(title, text, this.mode);
+    }
+
+    listObjects(
+        kind: string,
+        opts: { namespace?: string; labelSelector?: string; fieldSelector?: string },
+    ): Promise<K8sObject[]> {
+        return listResources(kind, {
+            context: this.store.context,
+            namespace: opts.namespace,
+            labelSelector: opts.labelSelector,
+            fieldSelector: opts.fieldSelector,
+        });
+    }
+
+    async getObject(ref: ResourceRef): Promise<K8sObject | undefined> {
+        return getJson(ref).catch(() => undefined);
+    }
+
+    getEvents(ref: ResourceRef, involvedKind: string): Promise<K8sEvent[]> {
+        return getEvents(ref, involvedKind);
+    }
+
+    // ── write verbs (from the detail dashboard) ───────────────────────────────
+    private refFor(obj: K8sObject, kindName: string): ResourceRef {
+        return { kind: kindName, name: obj.metadata?.name ?? "", namespace: obj.metadata?.namespace, context: this.store.context };
+    }
+
+    scaleResource(obj: K8sObject, kindName: string): void {
+        const ref = this.refFor(obj, kindName);
+        const current = String((obj.spec as { replicas?: number })?.replicas ?? "");
+        this.openPrompt(`Scale ${ref.name} to how many replicas?`, current, (value) => {
+            const n = Number(value);
+            if (!Number.isInteger(n) || n < 0) {
+                this.status = "invalid replica count";
+                this.tui.requestRender();
+                return;
+            }
+            void this.runAction(() => scaleResource(ref, n));
+        });
+    }
+
+    restartResource(obj: K8sObject, kindName: string): void {
+        const ref = this.refFor(obj, kindName);
+        this.openConfirm(`Restart rollout of ${kindName.replace(/s$/, "")} "${ref.name}"?`, () => rolloutRestart(ref));
+    }
+
+    cordonNode(obj: K8sObject, schedulable: boolean): void {
+        const node = obj.metadata?.name ?? "";
+        void this.runAction(() => setNodeSchedulable(this.store.context, node, schedulable));
+    }
+
+    drainNode(obj: K8sObject): void {
+        const node = obj.metadata?.name ?? "";
+        this.openConfirm(`Drain node "${node}"? Evicts its pods.`, () => drainNode(this.store.context, node));
+    }
+
+    suspendCronJob(obj: K8sObject, suspend: boolean): void {
+        const ref = this.refFor(obj, "cronjobs");
+        void this.runAction(() => setSuspend(ref, suspend));
+    }
+
+    triggerCronJob(obj: K8sObject): void {
+        const ref = this.refFor(obj, "cronjobs");
+        this.openConfirm(`Trigger CronJob "${ref.name}" now?`, () => triggerCronJob(ref));
+    }
+
+    // ── interactive subprocesses ──────────────────────────────────────────────
+    shellIntoPod(pod: K8sObject): void {
+        const ref = this.refFor(pod, "pods");
+        const containers = (pod.spec as { containers?: { name?: string }[] })?.containers ?? [];
+        if (containers.length > 1) {
+            const picker = new Selector(
+                `${ref.name} · container`,
+                containers.map((c) => ({ value: c.name ?? "", label: c.name ?? "" })),
+            );
+            picker.onPick = (value) => {
+                this.selector = undefined;
+                this.mode = this.afterShell;
+                void this.execShell(ref, value);
+            };
+            picker.onCancel = () => {
+                this.selector = undefined;
+                this.mode = this.afterShell;
+                this.tui.requestRender();
+            };
+            this.afterShell = this.mode;
+            this.openSelector(picker);
+        } else {
+            void this.execShell(ref, containers[0]?.name);
+        }
+    }
+
+    /** Suspend the TUI, hand the terminal to an interactive shell, then resume. */
+    private async execShell(ref: ResourceRef, container: string | undefined): Promise<void> {
+        this.suspendTui();
+        let exited = false;
+        for (const shell of ["/bin/bash", "/bin/sh"]) {
+            try {
+                const proc = Bun.spawn(["kubectl", ...execArgs(ref, container, shell)], {
+                    stdin: "inherit",
+                    stdout: "inherit",
+                    stderr: "inherit",
+                });
+                const code = await proc.exited;
+                // 126/127 ≈ shell missing; try the next candidate.
+                if (code !== 126 && code !== 127) {
+                    exited = true;
+                    break;
+                }
+            } catch {
+                // try next shell
+            }
+        }
+        this.resumeTui();
+        this.startTimer();
+        this.status = exited ? "" : "no shell (/bin/bash, /bin/sh) in container";
+        if (this.drillStack.length > 0) {
+            void this.drillStack[this.drillStack.length - 1].refresh();
+        }
+        this.tui.requestRender();
+    }
+
+    portForward(obj: K8sObject, kindName: string): void {
+        const ref = this.refFor(obj, kindName);
+        this.openPrompt(`Port-forward ${kindName.replace(/s$/, "")} "${ref.name}" (local:remote)`, "", (value) => {
+            if (!/^\d+:\d+$/.test(value)) {
+                this.status = "expected local:remote, e.g. 8080:80";
+                this.tui.requestRender();
+                return;
+            }
+            this.status = this.forwards.start(portForwardArgs(ref, value), `${ref.name} ${value}`);
+            this.tui.requestRender();
+        });
     }
 
     /**
@@ -451,7 +741,7 @@ export class DiggApp implements Component, DetailHost {
                 const rs = byName.get(value);
                 this.selector = undefined;
                 if (rs) {
-                    this.pushDetail(new DetailView(this, rs, "replicasets", this.store.context, true));
+                    this.pushDetail(new DetailView(this, rs, "replicasets", "ReplicaSet", this.store.context, true));
                 } else {
                     this.mode = prev;
                 }
@@ -486,20 +776,17 @@ export class DiggApp implements Component, DetailHost {
         if (!ref) {
             return;
         }
-        this.confirm = {
-            message: `Delete ${this.store.kind.name.replace(/s$/, "")} "${ref.name}"?`,
-            action: () => deleteResource(ref),
-        };
-        this.mode = "confirm";
+        this.openConfirm(`Delete ${this.store.kind.title.replace(/s$/, "")} "${ref.name}"?`, () => deleteResource(ref));
     }
 
     private openKindSelector(): void {
         this.openSelector(
             kindSelector(
+                this.store.allKinds(),
                 (value) => {
                     this.store.setKind(value);
                     this.closeSelector();
-                    void this.reload(false);
+                    void this.reloadAndWatch();
                 },
                 () => this.closeSelector(),
             ),
@@ -513,11 +800,17 @@ export class DiggApp implements Component, DetailHost {
                 (value) => {
                     this.store.setNamespace(value === "*" ? null : value);
                     this.closeSelector();
-                    void this.reload(false);
+                    void this.reloadAndWatch();
                 },
                 () => this.closeSelector(),
             ),
         );
+    }
+
+    /** Full reload + (re)point the live watch at the new target. */
+    private async reloadAndWatch(): Promise<void> {
+        await this.reload(false);
+        this.restartWatch();
     }
 
     /** The cluster picker is "home": esc has nowhere to go, so it does nothing. */
@@ -556,7 +849,9 @@ export class DiggApp implements Component, DetailHost {
         } else if (this.mode === "drill" && this.drillStack.length > 0) {
             lines = fill(this.drillStack[this.drillStack.length - 1].render(width));
         } else if (this.mode === "confirm" && this.confirm) {
-            lines = overlayConfirm(this.list(width), this.confirm.message, width);
+            lines = overlayConfirm(this.overlayBackground(width), this.confirm.message, width);
+        } else if (this.mode === "prompt" && this.prompt) {
+            lines = overlayPrompt(this.overlayBackground(width), this.prompt.message, this.prompt.value, width);
         } else {
             lines = this.list(width);
         }
@@ -564,8 +859,21 @@ export class DiggApp implements Component, DetailHost {
         return lines.map((line) => truncateToWidth(line, width));
     }
 
+    /** The screen a confirm/prompt overlay sits on: the drill view or the list. */
+    private overlayBackground(width: number): string[] {
+        if (this.overlayReturn === "drill" && this.drillStack.length > 0) {
+            return fill(this.drillStack[this.drillStack.length - 1].render(width));
+        }
+        return this.list(width);
+    }
+
     private list(width: number): string[] {
-        const state = { filtering: this.filtering, status: this.status, mouseEnabled: this.mouseEnabled };
+        const state = {
+            filtering: this.filtering,
+            status: this.status,
+            mouseEnabled: this.mouseEnabled,
+            forwards: this.forwards.status(),
+        };
         return renderList(this.store, state, width, this.bodyHeight());
     }
 }

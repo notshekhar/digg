@@ -15,6 +15,16 @@ export function isSecretOrConfigMap(obj: K8sObject): boolean {
     return obj.kind === "Secret" || obj.kind === "ConfigMap";
 }
 
+/**
+ * Decode a single base64 Secret value for display. Clean UTF-8 text is returned
+ * as-is; binary values fall back to their base64 form (with a note) so the
+ * viewer never shows mojibake.
+ */
+export function decodeSecretValue(b64: string): string {
+    const text = asCleanText(decodeBase64(b64));
+    return text ?? `(binary, base64)\n${b64}`;
+}
+
 /** True for valid UTF-8 with no control chars except tab and newline. */
 function asCleanText(bytes: Uint8Array): string | null {
     let text: string;

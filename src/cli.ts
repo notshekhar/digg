@@ -16,16 +16,21 @@ Options:
 
 Interactive keys:
   ↑/↓ or j/k    move          g/G    top/bottom
-  enter         open detail   :      switch kind
+  enter         open detail   :      switch kind (any CRD)
   n             namespace     c      context
   /             filter        y      YAML (e to edit)
   d             describe      l      logs (live)
-  r             revisions     x      delete (confirm)
+  s             shell (exec)  f      port-forward
+  S             scale         T      restart rollout
+  C/U           cordon/uncord D      drain node
+  space         suspend cron  t      trigger cron
+  r             revisions     X      delete (confirm)
   R             refresh       m      toggle mouse (select mode)
   esc           back          ctrl+c quit
 
-Mouse wheel scrolls everywhere by default. Press m to release the mouse
-when you want to select/copy text, then m again to resume scrolling.`;
+Every resource opens a Lens-style dashboard with a summary, related
+objects, and a live Events panel. Mouse wheel scrolls everywhere by
+default; press m to release the mouse for text selection/copy.`;
 
 function main(): void {
     const args = process.argv.slice(2);

@@ -1,8 +1,11 @@
 # digg
 
-A fast **Kubernetes TUI** for your terminal — browse pods, deployments,
-services, nodes and more; switch namespaces and contexts; view YAML, describe,
-and logs. Built in Bun on [`@earendil-works/pi-tui`](https://www.npmjs.com/package/@earendil-works/pi-tui)
+A fast **Kubernetes TUI** for your terminal — a Lens/k9s-style cockpit that
+browses **any** resource (built-ins and CRDs), opens a rich per-kind dashboard
+with live **events** on every object, streams logs, **shells into pods**,
+**port-forwards**, and runs day-2 actions (scale, restart, cordon/drain,
+suspend cron). Switch namespaces and contexts; view/edit YAML and describe.
+Built in Bun on [`@earendil-works/pi-tui`](https://www.npmjs.com/package/@earendil-works/pi-tui)
 (the renderer behind pi).
 
 It wraps your local `kubectl`, so every auth method (client certs, tokens, and
@@ -37,40 +40,59 @@ digg version    # print the version
 
 ### Keys
 
-| Key            | Action                |
-| -------------- | --------------------- |
-| `↑`/`↓`, `j`/`k` | move                |
-| `g` / `G`      | top / bottom          |
-| `:`            | switch resource kind  |
-| `n`            | switch namespace      |
-| `c`            | switch context        |
-| `/`            | filter by name        |
-| `enter`        | open detail dashboard |
-| `y`            | view YAML             |
-| `d`            | describe              |
-| `l`            | logs (live)           |
-| `x`            | delete (confirm)      |
-| `R`            | refresh now           |
-| `esc`          | back / clear filter   |
-| `ctrl+c`       | quit                  |
+| Key            | Action                          |
+| -------------- | ------------------------------- |
+| `↑`/`↓`, `j`/`k` | move                          |
+| `g` / `G`      | top / bottom                    |
+| `:`            | switch resource kind (any CRD)  |
+| `n`            | switch namespace                |
+| `c`            | switch context                  |
+| `/`            | filter by name                  |
+| `enter`        | open detail dashboard           |
+| `y`            | view YAML (`e` to edit)         |
+| `d`            | describe                        |
+| `l`            | logs (live)                     |
+| `s`            | shell / exec into a pod         |
+| `f`            | port-forward (pod / service)    |
+| `S`            | scale (deploy / sts / rs)       |
+| `T`            | restart rollout                 |
+| `C` / `U`      | cordon / uncordon a node        |
+| `D`            | drain a node                    |
+| `space`        | suspend / resume a CronJob      |
+| `t`            | trigger a CronJob now           |
+| `r`            | rollout revisions (deployments) |
+| `X`            | delete (confirm)                |
+| `R`            | refresh now                     |
+| `esc`          | back / clear filter             |
+| `ctrl+c`       | quit                            |
 
 The list auto-refreshes every few seconds. Mouse wheel scrolls everywhere.
 
 ### Detail dashboard
 
-Press `enter` on a deployment (or statefulset / daemonset / job) to drill in,
-Lens/Aptakube style:
+Press `enter` on **any** resource to drill into a Lens/Aptakube-style dashboard
+— no more raw YAML dumps. Every page shows a **summary**, a relevant **section**,
+and a live **Events** panel:
 
-- a summary (replicas, strategy, images, age),
-- its live **pods with CPU / memory** (`kubectl top`, auto-refreshing),
-- and from there: `y` YAML, `d` describe, `l` logs of the selected pod,
-  `p` to open a pod, `esc` to go back.
+- **workloads** (deployment / statefulset / daemonset / job) → live **pods with
+  CPU / memory** (`kubectl top`); `p` open pod, `l` aggregated logs, `S` scale,
+  `T` restart, `r` revisions.
+- **pods** → containers + pod metrics; `s` shell in, `f` port-forward, `l` logs.
+- **services** → endpoint pods + ports/selector; `f` port-forward.
+- **nodes** → pods on the node + capacity/roles/version; `C`/`U` cordon, `D` drain.
+- **configmaps / secrets** → data keys (`enter` reveals a value; secrets decoded).
+- **ingresses** → host/path → service rules. **PVCs** → mounting pods.
+- **cronjobs** → recent jobs; `space` suspend, `t` trigger now.
 
-`enter` on a pod shows its containers and pod-level metrics. Logs stream live
-(`kubectl logs -f`) and auto-follow the tail; `f` toggles follow, `G` jumps to
-live.
+Logs stream live (`kubectl logs -f`) and auto-follow the tail; `f` toggles
+follow, `G` jumps to live. Shells suspend the TUI and hand you the raw terminal
+(`/bin/bash`, falling back to `/bin/sh`), then restore on exit. Port-forwards
+keep running in the background and show in the header while you browse.
 
 ## Resources
 
-Pods, Deployments, StatefulSets, DaemonSets, Services, Ingresses, ConfigMaps,
-Secrets, Jobs, CronJobs, Nodes, Namespaces, and PVCs. Press `:` to switch.
+Curated kinds — Pods, Deployments, StatefulSets, DaemonSets, Services, Ingresses,
+ConfigMaps, Secrets, Jobs, CronJobs, Nodes, Namespaces, PVCs — get rich columns
+and tailored dashboards. Press `:` to switch to those **or any other kind the
+cluster exposes** (CRDs, RBAC, HPAs, …), discovered via `kubectl api-resources`;
+those open a generic list with yaml / describe / edit / delete / events.

@@ -11,6 +11,7 @@ export const ui = {
     dim: (text: string) => chalk.gray(text),
     accent: (text: string) => chalk.cyan(text),
     danger: (text: string) => chalk.red(text),
+    warn: (text: string) => chalk.yellow(text),
     footer: (text: string) => chalk.gray(text),
 };
 
