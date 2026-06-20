@@ -55,11 +55,20 @@ if (existsSync(stageDir)) {
 }
 mkdirSync(stageDir, { recursive: true });
 
-console.log(`▶ building ${binPath} (v${pkg.version})`);
+// Maximize CPU compatibility: x64 → -baseline (Nehalem) so binaries run on any
+// x86_64 CPU (the default is Haswell/AVX2 → SIGILL on pre-2013 / low-end CPUs).
+// arm64 has no baseline/modern split. Windows is excluded: Bun's
+// bun-windows-x64-baseline runtime fails to extract ("download may be
+// incomplete", repro on Bun 1.3.14). The published asset keeps the plain arch
+// name (digg-<os>-x64.tar.gz) — only the bun --compile target gains the suffix.
+const compileTarget =
+    shortTarget.endsWith("x64") && !target.includes("windows") ? `${target}-baseline` : target;
+
+console.log(`▶ building ${binPath} (v${pkg.version}) [target ${compileTarget}]`);
 
 await $`bun build ${join(import.meta.dir, "src/cli.ts")} \
   --compile \
-  --target=${target} \
+  --target=${compileTarget} \
   --minify \
   --define __DIGG_VERSION__=${JSON.stringify(pkg.version)} \
   --outfile ${binPath}`;

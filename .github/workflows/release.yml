@@ -15,15 +15,14 @@ permissions:
     contents: write
 
 jobs:
-    release:
-        name: build + release
+    # ─── Job 1: resolve tag ───────────────────────────────────────────────────
+    prepare:
+        name: prepare
         runs-on: ubuntu-latest
+        outputs:
+            tag: ${{ steps.tag.outputs.tag }}
+            ver: ${{ steps.tag.outputs.ver }}
         steps:
-            - uses: actions/checkout@v4
-            - uses: oven-sh/setup-bun@v2
-              with:
-                  bun-version: latest
-
             - name: Resolve tag + version
               id: tag
               run: |
@@ -33,40 +32,88 @@ jobs:
                   echo "tag=$tag" >> "$GITHUB_OUTPUT"
                   echo "ver=${tag#v}" >> "$GITHUB_OUTPUT"
 
+    # ─── Job 2: per-target binary build (matrix) ──────────────────────────────
+    # digg is pure JS/TS (no native modules), so every target cross-compiles from
+    # a single ubuntu runner — the matrix just parallelizes + isolates each target.
+    build:
+        name: binary (${{ matrix.target }})
+        needs: prepare
+        runs-on: ubuntu-latest
+        strategy:
+            fail-fast: false
+            matrix:
+                target: [darwin-arm64, darwin-x64, linux-x64, linux-arm64, windows-x64]
+        steps:
+            - uses: actions/checkout@v4
+            - uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: latest
+
             - name: Sync package version
               run: |
                   bun -e "
                     const fs = require('fs');
                     const j = JSON.parse(fs.readFileSync('package.json','utf8'));
-                    j.version = '${{ steps.tag.outputs.ver }}';
+                    j.version = '${{ needs.prepare.outputs.ver }}';
                     fs.writeFileSync('package.json', JSON.stringify(j, null, 4) + '\n');
                   "
 
             - run: bun install --frozen-lockfile
 
-            - name: Build binaries
+            # Retry the compile: fetching a cross-target Bun runtime (especially
+            # the -baseline x64 variants) is occasionally flaky ("download may be
+            # incomplete"). 3 attempts turn a transient blip into a pass.
+            - name: Build binary
               run: |
-                  for t in bun-darwin-arm64 bun-darwin-x64 bun-linux-x64 bun-linux-arm64 bun-windows-x64; do
-                    bun build-bin.ts "$t"
+                  n=0
+                  until bun build-bin.ts bun-${{ matrix.target }}; do
+                    n=$((n + 1))
+                    if [ "$n" -ge 3 ]; then echo "build failed after $n attempts"; exit 1; fi
+                    echo "build attempt $n failed — retrying in 5s…"; sleep 5
                   done
 
-            - name: Checksums
+            - name: Checksum
               working-directory: dist/bin
+              run: sha256sum "digg-${{ matrix.target }}.tar.gz" > "digg-${{ matrix.target }}.tar.gz.sha256"
+
+            - name: Upload binary artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: bin-${{ matrix.target }}
+                  path: |
+                      dist/bin/digg-${{ matrix.target }}.tar.gz
+                      dist/bin/digg-${{ matrix.target }}.tar.gz.sha256
+                  retention-days: 14
+
+    # ─── Job 3: GitHub Release ────────────────────────────────────────────────
+    release:
+        name: github-release
+        needs: [prepare, build]
+        runs-on: ubuntu-latest
+        steps:
+            - name: Download all binary artifacts
+              uses: actions/download-artifact@v4
+              with:
+                  pattern: bin-*
+                  path: release
+                  merge-multiple: true
+
+            - name: Aggregate SHA256SUMS
+              working-directory: release
               run: |
                   : > SHA256SUMS
                   for f in digg-*.tar.gz; do
                     sha256sum "$f" >> SHA256SUMS
-                    sha256sum "$f" > "$f.sha256"
                   done
                   cat SHA256SUMS
 
             - name: Create / update GitHub Release
               uses: softprops/action-gh-release@v2
               with:
-                  tag_name: ${{ steps.tag.outputs.tag }}
-                  name: ${{ steps.tag.outputs.tag }}
+                  tag_name: ${{ needs.prepare.outputs.tag }}
+                  name: ${{ needs.prepare.outputs.tag }}
                   generate_release_notes: true
                   files: |
-                      dist/bin/digg-*.tar.gz
-                      dist/bin/digg-*.tar.gz.sha256
-                      dist/bin/SHA256SUMS
+                      release/digg-*.tar.gz
+                      release/digg-*.tar.gz.sha256
+                      release/SHA256SUMS
