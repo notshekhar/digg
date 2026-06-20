@@ -855,8 +855,12 @@ export class DiggApp implements Component, DetailHost {
         } else {
             lines = this.list(width);
         }
-        // pi-tui hard-crashes on any line wider than the terminal — clamp.
-        return lines.map((line) => truncateToWidth(line, width));
+        // pi-tui writes back every line verbatim: it clamps width but not the
+        // line count, so a view taller than the terminal scrolls the screen into
+        // "full screen". Clamp both — width (pi-tui hard-crashes on overflow) and
+        // height (cap to the terminal's rows so output never exceeds the viewport).
+        const rows = process.stdout.rows || 24;
+        return lines.slice(0, rows).map((line) => truncateToWidth(line, width));
     }
 
     /** The screen a confirm/prompt overlay sits on: the drill view or the list. */
