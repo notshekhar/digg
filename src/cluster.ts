@@ -126,7 +126,8 @@ export class ClusterStore {
         } else {
             this.objects.set(key, obj);
         }
-        this.rebuild();
+        // Note: caller rebuilds (debounced) so a burst of events — a rollout, a
+        // node draining — costs one re-sort/re-layout instead of one per event.
         return true;
     }
 
@@ -174,7 +175,8 @@ export class ClusterStore {
         };
     }
 
-    private rebuild(): void {
+    /** Recompute the visible/sorted rows + table from the live object map. */
+    rebuild(): void {
         // Keep the cursor on the same object across live updates (pods added or
         // removed above it would otherwise make the selection jump).
         const selectedKey = this.visible[this.table.selectedIndex]

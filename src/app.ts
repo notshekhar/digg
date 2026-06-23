@@ -41,11 +41,24 @@ import { getEditorOptions, getLastContext, setEditorOptions } from "./settings.t
 
 const ENABLE_MOUSE = "\x1b[?1000h\x1b[?1006h";
 const DISABLE_MOUSE = "\x1b[?1000l\x1b[?1006l";
+// Alternate screen buffer (like vim/less/k9s). The app paints into its own
+// isolated full-screen region instead of the normal scrollback, so repaints
+// and popups never jostle prior shell output, and the terminal's own scrollback
+// search can't desync our differential renderer. Restored on exit.
+const ENTER_ALT = "\x1b[?1049h";
+const EXIT_ALT = "\x1b[?1049l";
 // The list updates live via the watch stream; this timer drives the detail
 // dashboard (which also needs polled `kubectl top` metrics) and a periodic full
 // list resync as a safety net in case the watch drops an event.
 const TICK_MS = 2000;
-const LIST_RESYNC_TICKS = 4; // full list reload every ~8s
+// The live watch keeps the list current, so the full re-list is only a safety
+// net for events a dropped/restarted watch might have missed. Doing it every
+// few seconds re-parses the entire (multi-MB on a big cluster) JSON payload on
+// the main thread and stutters the UI — so resync sparingly.
+const LIST_RESYNC_TICKS = 30; // full list reload every ~60s
+// Coalesce a burst of watch events (a rollout, a node drain) into a single
+// table rebuild + repaint instead of one per event.
+const WATCH_COALESCE_MS = 50;
 
 type Mode = "list" | "detail" | "logs" | "drill" | "select" | "confirm" | "edit" | "prompt";
 
@@ -90,6 +103,7 @@ export class DiggApp implements Component, DetailHost {
     private filtering = false;
     private status = "connecting…";
     private timer?: ReturnType<typeof setInterval>;
+    private listRebuildTimer?: ReturnType<typeof setTimeout>;
     /** Depth of in-flight foreground loads; > 0 shows the spinner overlay. */
     private loading = 0;
     private loadingLabel = "";
@@ -101,8 +115,9 @@ export class DiggApp implements Component, DetailHost {
             process.exit(1);
         }
         process.on("SIGINT", () => this.quit());
-        // Restore mouse reporting even if pi-tui throws mid-render.
-        process.on("exit", () => process.stdout.write(DISABLE_MOUSE));
+        // Restore mouse reporting + leave the alternate screen even if pi-tui
+        // throws mid-render, so a crash never strands the terminal.
+        process.on("exit", () => process.stdout.write(DISABLE_MOUSE + EXIT_ALT));
 
         animator.setRenderer(() => this.tui.requestRender());
         this.wireTui();
@@ -136,10 +151,13 @@ export class DiggApp implements Component, DetailHost {
         }
         process.stdout.write(DISABLE_MOUSE);
         this.tui.stop();
+        // Hand the normal screen to the child process (e.g. an interactive shell).
+        process.stdout.write(EXIT_ALT);
     }
 
     /** Re-attach the TUI after start or after a suspend, forcing a clean repaint. */
     private resumeTui(): void {
+        process.stdout.write(ENTER_ALT);
         if (this.mouseEnabled) {
             process.stdout.write(ENABLE_MOUSE);
         }
@@ -173,6 +191,9 @@ export class DiggApp implements Component, DetailHost {
         if (this.timer) {
             clearInterval(this.timer);
         }
+        if (this.listRebuildTimer) {
+            clearTimeout(this.listRebuildTimer);
+        }
         this.logs.stop();
         this.forwards.stopAll();
         this.watch.stop();
@@ -181,6 +202,7 @@ export class DiggApp implements Component, DetailHost {
         }
         process.stdout.write(DISABLE_MOUSE);
         this.tui.stop();
+        process.stdout.write(EXIT_ALT);
         process.exit(0);
     }
 
@@ -215,11 +237,25 @@ export class DiggApp implements Component, DetailHost {
     private restartWatch(): void {
         this.watch.start(this.store.context, this.store.watchTarget(), {
             onEvent: (type, obj) => {
+                // Stage the change into the store now; rebuild + repaint on a
+                // short debounce so a flood of events is one re-sort, not N.
                 if (this.store.applyWatchEvent(type, obj)) {
-                    this.tui.requestRender();
+                    this.scheduleListRebuild();
                 }
             },
         });
+    }
+
+    /** Coalesce staged watch events into one table rebuild + render. */
+    private scheduleListRebuild(): void {
+        if (this.listRebuildTimer) {
+            return;
+        }
+        this.listRebuildTimer = setTimeout(() => {
+            this.listRebuildTimer = undefined;
+            this.store.rebuild();
+            this.tui.requestRender();
+        }, WATCH_COALESCE_MS);
     }
 
     /**

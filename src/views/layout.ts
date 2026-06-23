@@ -1,6 +1,17 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { ui } from "../theme.ts";
 
+const ANSI = /\x1b\[[0-9;]*m/g;
+
+/**
+ * Grey out the screen behind a modal so the popup reads as floating *above* the
+ * content, not spliced into it. Existing colours are stripped first — otherwise
+ * a bright selected row or status would still pop through the wash.
+ */
+function dimBackground(lines: string[]): string[] {
+    return lines.map((line) => ui.dim(line.replace(ANSI, "")));
+}
+
 /** Pad a (possibly ANSI-styled) line with spaces to the given width. */
 export function pad(text: string, width: number): string {
     return text + " ".repeat(Math.max(0, width - visibleWidth(text)));
@@ -44,7 +55,7 @@ export function overlayConfirm(base: string[], message: string, width: number): 
         ui.danger(`└${"─".repeat(content + 2)}┘`),
     ];
 
-    return spliceBox(base, box, content, width);
+    return spliceBox(dimBackground(base), box, content, width);
 }
 
 /** Splice a centered input prompt over the base screen lines. */
@@ -64,7 +75,7 @@ export function overlayPrompt(base: string[], message: string, value: string, wi
         boxLine(ui.dim("enter confirm · esc cancel")),
         ui.accent(`└${"─".repeat(content + 2)}┘`),
     ];
-    return spliceBox(base, box, content, width);
+    return spliceBox(dimBackground(base), box, content, width);
 }
 
 /** Splice a small centered spinner box over the base screen lines. */
@@ -80,7 +91,7 @@ export function overlayLoading(base: string[], label: string, frame: string, wid
         boxLine(center(text, content)),
         ui.accent(`└${"─".repeat(content + 2)}┘`),
     ];
-    return spliceBox(base, box, content, width);
+    return spliceBox(dimBackground(base), box, content, width);
 }
 
 function spliceBox(base: string[], box: string[], content: number, width: number): string[] {
