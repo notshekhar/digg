@@ -67,6 +67,22 @@ export function overlayPrompt(base: string[], message: string, value: string, wi
     return spliceBox(base, box, content, width);
 }
 
+/** Splice a small centered spinner box over the base screen lines. */
+export function overlayLoading(base: string[], label: string, frame: string, width: number): string[] {
+    const text = `${ui.accent(frame)} ${label}`;
+    const content = Math.min(width - 6, Math.max(visibleWidth(text), 18));
+    const boxLine = (inner: string): string => {
+        const padded = inner + " ".repeat(Math.max(0, content - visibleWidth(inner)));
+        return ui.accent("│ ") + padded + ui.accent(" │");
+    };
+    const box = [
+        ui.accent(`┌${"─".repeat(content + 2)}┐`),
+        boxLine(center(text, content)),
+        ui.accent(`└${"─".repeat(content + 2)}┘`),
+    ];
+    return spliceBox(base, box, content, width);
+}
+
 function spliceBox(base: string[], box: string[], content: number, width: number): string[] {
     const lines = [...base];
     const startRow = Math.max(0, Math.floor((lines.length - box.length) / 2));

@@ -14,6 +14,7 @@ import { decodeSecretValue } from "../secret-yaml.ts";
 import type { LogSpec } from "../log-stream.ts";
 import { type WatchTarget, WatchController } from "../watch.ts";
 import { ui } from "../theme.ts";
+import { animator, spinnerFrame } from "../spinner.ts";
 import { Table } from "./table.ts";
 
 export interface DetailHost {
@@ -65,6 +66,8 @@ export class DetailView {
     private sectionObjects: K8sObject[] = [];
     private events: K8sEvent[] = [];
     private loading = true;
+    /** True while the animator is held for this view's first load. */
+    private animating = false;
     /** What enter does on the selected section row, if anything. */
     private onEnterRow?: (index: number) => void;
 
@@ -97,6 +100,11 @@ export class DetailView {
     /** Called when this view becomes the visible top of the drill stack. */
     start(): void {
         this.disposed = false;
+        // Animate the spinner through the first blocking load (no data yet).
+        if (this.loading && !this.animating) {
+            this.animating = true;
+            animator.begin();
+        }
         this.ensureWatch();
         void this.refresh();
     }
@@ -104,11 +112,19 @@ export class DetailView {
     /** Called when this view is covered by another or popped off the stack. */
     stop(): void {
         this.disposed = true;
+        this.releaseAnimator();
         this.watch.stop();
         this.watchStarted = false;
         if (this.refreshTimer) {
             clearTimeout(this.refreshTimer);
             this.refreshTimer = undefined;
+        }
+    }
+
+    private releaseAnimator(): void {
+        if (this.animating) {
+            this.animating = false;
+            animator.end();
         }
     }
 
@@ -124,6 +140,7 @@ export class DetailView {
         }
         this.model = detailModel(this.kindName, this.obj, this.isWorkload, this.top);
         this.loading = false;
+        this.releaseAnimator();
         this.ensureWatch();
         this.host.requestRender();
     }
@@ -400,7 +417,8 @@ export class DetailView {
 
     render(width: number): string[] {
         const kind = this.kindName.replace(/s$/, "");
-        const lines = [ui.headerBar(` ${kind}: ${this.ref.name} `)];
+        const head = ui.headerBar(` ${kind}: ${this.ref.name} `);
+        const lines = [this.loading ? `${head}  ${ui.accent(spinnerFrame())} loading…` : head];
         for (const [key, value] of this.model.summary) {
             lines.push(`  ${ui.headerKey(`${key}:`)} ${ui.headerVal(value)}`);
         }
@@ -408,7 +426,7 @@ export class DetailView {
 
         if (this.model.section) {
             const count = this.sectionObjects.length || this.table.count;
-            lines.push(ui.columnHeader(`  ${this.model.section.title} (${count})${this.loading ? "  loading…" : ""}`));
+            lines.push(ui.columnHeader(`  ${this.model.section.title} (${count})`));
             const tableHeight = this.tableHeight();
             const tableLines = this.table.render(width, tableHeight);
             while (tableLines.length < tableHeight) tableLines.push("");

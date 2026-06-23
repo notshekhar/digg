@@ -1,5 +1,7 @@
 import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { logLevelColor, ui } from "../theme.ts";
+import { spinnerFrame } from "../spinner.ts";
+import { center } from "./layout.ts";
 
 const MAX_LINES = 5000;
 
@@ -183,6 +185,11 @@ export class LogView {
         }
         while (body.length < height) {
             body.push("");
+        }
+        // Nothing has streamed yet: float a centered "waiting for logs…" line so
+        // the pane never looks frozen while `kubectl logs -f` connects.
+        if (this.lines.length === 0) {
+            body[Math.floor(height / 2)] = center(ui.dim(`${spinnerFrame()} waiting for logs…`), width);
         }
 
         const state = this.follow ? ui.accent("following") : ui.dim("paused");

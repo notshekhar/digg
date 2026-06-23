@@ -1,5 +1,6 @@
 import type { K8sObject } from "./kubectl.ts";
 import { WORKLOAD_KINDS, workloadSelector } from "./format.ts";
+import { animator } from "./spinner.ts";
 import { LogView } from "./views/log-view.ts";
 
 export interface LogSpec {
@@ -43,6 +44,8 @@ export class LogController {
     private hooks: LogHooks;
     private view?: LogView;
     private proc?: ReturnType<typeof Bun.spawn>;
+    /** True between open and the first streamed byte; drives the spinner. */
+    private waiting = false;
 
     constructor(hooks: LogHooks) {
         this.hooks = hooks;
@@ -71,9 +74,21 @@ export class LogController {
         if (spec.namespace) {
             args.push("-n", spec.namespace);
         }
+        // Animate a "waiting for logs…" placeholder until the stream produces
+        // its first line (`kubectl logs -f` can sit silent for a beat).
+        this.waiting = true;
+        animator.begin();
         this.proc = Bun.spawn(["kubectl", ...args], { stdout: "pipe", stderr: "pipe" });
         void this.pump(this.proc, view);
         this.hooks.requestRender();
+    }
+
+    /** End the waiting state (and its spinner) once, on first byte or teardown. */
+    private settle(): void {
+        if (this.waiting) {
+            this.waiting = false;
+            animator.end();
+        }
     }
 
     handleInput(data: string): void {
@@ -85,6 +100,7 @@ export class LogController {
     }
 
     stop(): void {
+        this.settle();
         this.view = undefined;
         if (this.proc) {
             try {
@@ -107,6 +123,7 @@ export class LogController {
                 if (this.view !== view) {
                     return;
                 }
+                this.settle();
                 view.append(decoder.decode(chunk, { stream: true }));
                 this.hooks.requestRender();
             }

@@ -33,7 +33,8 @@ import { renderList } from "./views/list-view.ts";
 import { VimEditor } from "./views/editor/vim-editor.ts";
 import { PortForwardController } from "./port-forward.ts";
 import { WatchController } from "./watch.ts";
-import { fill, overlayConfirm, overlayPrompt } from "./views/layout.ts";
+import { fill, overlayConfirm, overlayLoading, overlayPrompt } from "./views/layout.ts";
+import { animator, spinnerFrame } from "./spinner.ts";
 import { errorText } from "./util.ts";
 import { fromEditableYaml, isSecretOrConfigMap, toEditableYaml } from "./secret-yaml.ts";
 import { getEditorOptions, getLastContext, setEditorOptions } from "./settings.ts";
@@ -89,6 +90,9 @@ export class DiggApp implements Component, DetailHost {
     private filtering = false;
     private status = "connecting…";
     private timer?: ReturnType<typeof setInterval>;
+    /** Depth of in-flight foreground loads; > 0 shows the spinner overlay. */
+    private loading = 0;
+    private loadingLabel = "";
 
     // ── lifecycle ──────────────────────────────────────────────────────────
     async start(): Promise<void> {
@@ -100,6 +104,7 @@ export class DiggApp implements Component, DetailHost {
         // Restore mouse reporting even if pi-tui throws mid-render.
         process.on("exit", () => process.stdout.write(DISABLE_MOUSE));
 
+        animator.setRenderer(() => this.tui.requestRender());
         this.wireTui();
         this.resumeTui();
         this.startTimer();
@@ -181,7 +186,7 @@ export class DiggApp implements Component, DetailHost {
 
     private async init(): Promise<void> {
         try {
-            await this.store.loadContexts();
+            await this.withLoading("connecting…", () => this.store.loadContexts());
             this.openContextSelector(); // land on the cluster picker (home)
         } catch (err) {
             this.status = errorText(err);
@@ -190,10 +195,14 @@ export class DiggApp implements Component, DetailHost {
     }
 
     private async enterCluster(context: string): Promise<void> {
-        await this.store.enter(context);
-        this.selector = undefined;
-        this.mode = "list";
-        await this.reload(false);
+        // Discovery + namespace listing can be slow on a big cluster or behind a
+        // slow auth plugin; keep the spinner up across the whole entry.
+        await this.withLoading(`connecting to ${context}…`, async () => {
+            await this.store.enter(context);
+            this.selector = undefined;
+            this.mode = "list";
+            await this.reload(true);
+        });
         this.restartWatch();
     }
 
@@ -213,19 +222,46 @@ export class DiggApp implements Component, DetailHost {
         });
     }
 
-    /** Re-fetch the current resource list. `silent` skips the loading status. */
-    private async reload(silent: boolean): Promise<void> {
-        if (!silent) {
-            this.status = `loading ${this.store.kind.title.toLowerCase()}…`;
+    /**
+     * Run an async operation behind the animated loading overlay. The overlay
+     * is shown over whatever screen is active (list, detail, scroll, logs, the
+     * cluster picker…), so every foreground wait gets visible feedback. Calls
+     * nest safely — a kind switch (loading list) inside an enter-cluster wait
+     * just keeps the spinner up until both finish.
+     */
+    private async withLoading<T>(label: string, fn: () => Promise<T>): Promise<T> {
+        this.loading++;
+        this.loadingLabel = label;
+        animator.begin();
+        this.tui.requestRender();
+        try {
+            return await fn();
+        } finally {
+            this.loading--;
+            if (this.loading === 0) {
+                this.loadingLabel = "";
+            }
+            animator.end();
             this.tui.requestRender();
         }
-        try {
-            await this.store.refresh();
-            this.status = "";
-        } catch (err) {
-            this.status = errorText(err);
+    }
+
+    /** Re-fetch the current resource list. `silent` skips the loading overlay. */
+    private async reload(silent: boolean): Promise<void> {
+        const run = async (): Promise<void> => {
+            try {
+                await this.store.refresh();
+                this.status = "";
+            } catch (err) {
+                this.status = errorText(err);
+            }
+            this.tui.requestRender();
+        };
+        if (silent) {
+            await run();
+        } else {
+            await this.withLoading(`loading ${this.store.kind.title.toLowerCase()}…`, run);
         }
-        this.tui.requestRender();
     }
 
     // ── input ────────────────────────────────────────────────────────────────
@@ -424,10 +460,10 @@ export class DiggApp implements Component, DetailHost {
 
     private async showText(ref: ResourceRef, what: "yaml" | "describe"): Promise<void> {
         const prev = this.mode;
-        this.status = `loading ${what}…`;
-        this.tui.requestRender();
         try {
-            const text = what === "yaml" ? await getYaml(ref) : await describe(ref);
+            const text = await this.withLoading(`loading ${what}…`, () =>
+                what === "yaml" ? getYaml(ref) : describe(ref),
+            );
             this.present(`${ref.name} · ${what}`, text, prev, what === "yaml" ? ref : undefined);
         } catch (err) {
             this.status = errorText(err);
@@ -447,12 +483,13 @@ export class DiggApp implements Component, DetailHost {
      * editing so a background reload can't clobber the buffer.
      */
     private async openEditor(ref: ResourceRef): Promise<void> {
-        this.status = "loading…";
-        this.tui.requestRender();
         try {
-            const obj = await getJson(ref);
-            const decoded = isSecretOrConfigMap(obj);
-            const text = decoded ? toEditableYaml(obj) : await getYaml(ref);
+            const { decoded, text } = await this.withLoading("loading…", async () => {
+                const obj = await getJson(ref);
+                const decoded = isSecretOrConfigMap(obj);
+                const text = decoded ? toEditableYaml(obj) : await getYaml(ref);
+                return { decoded, text };
+            });
             this.afterEdit = this.drillStack.length > 0 ? "drill" : "list";
             if (this.timer) {
                 clearInterval(this.timer);
@@ -717,14 +754,14 @@ export class DiggApp implements Component, DetailHost {
     async openRevisions(obj: K8sObject, selector: string): Promise<void> {
         const prev = this.mode;
         const name = obj.metadata?.name ?? "";
-        this.status = "loading revisions…";
-        this.tui.requestRender();
         try {
-            const all = await listResources("replicasets", {
-                context: this.store.context,
-                namespace: obj.metadata?.namespace,
-                labelSelector: selector,
-            });
+            const all = await this.withLoading("loading revisions…", () =>
+                listResources("replicasets", {
+                    context: this.store.context,
+                    namespace: obj.metadata?.namespace,
+                    labelSelector: selector,
+                }),
+            );
             const owned = sortRevisions(
                 all.filter((rs) =>
                     (rs.metadata as { ownerReferences?: { kind?: string; name?: string }[] })?.ownerReferences?.some(
@@ -854,6 +891,12 @@ export class DiggApp implements Component, DetailHost {
             lines = overlayPrompt(this.overlayBackground(width), this.prompt.message, this.prompt.value, width);
         } else {
             lines = this.list(width);
+        }
+        // A foreground load (entering a cluster, opening yaml, switching kind…)
+        // floats a centered spinner over whatever screen is active, so every
+        // wait — in any mode — gets visible feedback.
+        if (this.loadingLabel) {
+            lines = overlayLoading(lines, this.loadingLabel, spinnerFrame(), width);
         }
         // pi-tui writes back every line verbatim: it clamps width but not the
         // line count, so a view taller than the terminal scrolls the screen into

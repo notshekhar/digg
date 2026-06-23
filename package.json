@@ -1,6 +1,6 @@
 {
     "name": "digg",
-    "version": "0.3.3",
+    "version": "0.3.4",
     "description": "digg — a fast Kubernetes TUI in your terminal.",
     "type": "module",
     "license": "MIT",
