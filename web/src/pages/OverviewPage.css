@@ -151,3 +151,19 @@
 .nodecard-meta {
     font-size: 11px;
 }
+
+/*
+ * A flex column that scrolls must not let its children shrink.
+ *
+ * `flex-shrink: 1` is the default, and `.panel { min-height: 0 }` lets a panel
+ * go BELOW its content height — so when the console opens and the viewport
+ * halves, every card is squeezed to a fraction of its size and its contents
+ * paint over the card beneath it. The container is the thing that scrolls;
+ * children keep their natural height.
+ */
+.overview-scroll > * {
+    flex: 0 0 auto;
+}
+.rowlist > * {
+    flex: 0 0 auto;
+}

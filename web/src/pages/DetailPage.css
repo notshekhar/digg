@@ -235,3 +235,6 @@
 .yaml-bar kbd {
     margin-left: 2px;
 }
+.evlist > * {
+    flex: 0 0 auto;
+}

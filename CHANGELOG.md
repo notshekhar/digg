@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **Fixed: opening the console squashed the page behind it.** Panels in a
+  scrolling flex column inherit `flex-shrink: 1`, and `.panel` sets
+  `min-height: 0`, so halving the viewport squeezed each card to a third of its
+  height and its contents painted over the card below. The container scrolls;
+  children keep their natural size. Same guard applied to the events list, the
+  overview row lists and the namespace picker.
+
 ## v1.1.0
 
 **digg is live.** Tables and detail pages are fed by Kubernetes watches over a
