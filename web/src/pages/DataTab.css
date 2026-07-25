@@ -16,6 +16,8 @@
     font-size: 11.5px;
 }
 
+/* Same rule as .detail-scroll: the scroller is full-bleed so its bar sits on
+   the window edge; the reading column is capped on the rows. */
 .data-list {
     flex: 1;
     min-height: 0;
@@ -25,8 +27,12 @@
     flex-direction: column;
     gap: 8px;
     width: 100%;
+}
+.data-list > * {
+    width: 100%;
     max-width: 1180px;
-    margin: 0 auto;
+    margin-inline: auto;
+    flex: 0 0 auto;
 }
 
 .data-row {

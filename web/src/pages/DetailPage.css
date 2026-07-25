@@ -61,7 +61,14 @@
     flex-direction: column;
 }
 
-/* Reading content gets a column; code and logs get the whole width. */
+/*
+ * Reading content gets a column; code and logs get the whole width.
+ *
+ * The SCROLLER is full-bleed and the column is capped on the children instead.
+ * Capping the scroller itself would park its scrollbar in the middle of the
+ * window, floating beside the content rather than on the window edge where
+ * every other scrollbar in the app (and the OS) puts it.
+ */
 .detail-scroll {
     flex: 1;
     min-height: 0;
@@ -71,8 +78,12 @@
     flex-direction: column;
     gap: 12px;
     width: 100%;
+}
+.detail-scroll > * {
+    width: 100%;
     max-width: 1180px;
-    margin: 0 auto;
+    margin-inline: auto;
+    flex: 0 0 auto;
 }
 
 .detail-section {

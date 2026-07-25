@@ -1,5 +1,73 @@
 # Changelog
 
+## v1.1.0
+
+**digg is live.** Tables and detail pages are fed by Kubernetes watches over a
+WebSocket instead of a five-second poll: a pod appears the moment it is
+scheduled, goes yellow the moment it restarts, and disappears when it is gone.
+
+- **Watches, not polls.** The server runs `kubectl get <kind> --watch
+  --output-watch-events -o json` — one process per (context, kind, namespace),
+  refcounted across every tab and page, killed ten seconds after the last
+  reader leaves. Shelling out keeps kubectl in charge of authentication, so
+  exec plugins (aws/gcp/oidc), client certs and tokens all keep working; an
+  embedded `kubectl proxy` would have been faster to write and would have
+  opened an unauthenticated cluster-admin port on localhost.
+- **Deltas that are deltas.** Only rows whose rendered form actually changed go
+  down the wire, coalesced into 100ms frames, so a rollout emitting hundreds of
+  events a second still renders at a readable rate.
+- **Metrics stay polled, deliberately.** `metrics.k8s.io` implements only get
+  and list (`watch is not supported on resources of kind pods.metrics.k8s.io`)
+  and metrics-server samples on its own schedule — 60s by default — so usage
+  bars refresh on a 15s timer rather than pretending to stream. Lens splits it
+  the same way; its charts are Prometheus `query_range` polls at a 60s step.
+- **Degradation is visible, never silent.** A kind with no watch verb, a
+  dropped socket or a paused session falls back to polling automatically, the
+  last known rows stay on screen while it switches, and the dot on the pause
+  button says which mode you are in. Objects listed before an unwatchable kind
+  fails are still shown.
+- **Deleting the object you are looking at** now closes its page and says so,
+  instead of leaving a detail view that quietly stopped updating.
+- **Refresh actually refreshes, visibly.** On a live stream the button used to
+  do nothing at all: it kicked the pollers, and streaming views do not poll. It
+  now re-asks the socket for a fresh snapshot, spins its icon and shows the
+  progress hairline — an action that changes nothing on screen still has to be
+  acknowledged.
+- **The console button toggles**, like ⌘J always did, and shows a pressed
+  state. Hiding the console no longer kills what is running in it: the panel is
+  hidden with CSS rather than unmounted, because unmounting an xterm closes its
+  socket and the server kills the pty with it.
+
+**Detail pages that answer the question.** Pods, workloads and nodes get a full
+page instead of a summary and a table — the shape Aptakube proved right.
+
+- **Deployment / StatefulSet / DaemonSet / ReplicaSet / Job pages**: identity
+  card (age, namespace, selector, labels, annotations), the rollout knobs
+  (strategy, max surge, max unavailable) with live conditions, the scheduling
+  block that explains a Pending pod (node selector, node affinity, topology
+  spread, tolerations), container cards with usage against their own requests
+  and limits, and the pods the workload owns — desired/updated/ready/available,
+  each row with CPU and memory bars, restarts, last restart and its reason.
+- **Pod pages**: phase, conditions, start time, pod IP, host IP, node, service
+  account, QoS, priority class, restart policy; per-container status
+  (Running/Started/Ready), restart reason, and CPU/memory usage with the
+  allocation it was given. Container cards open logs or a shell in place.
+- **Revisions tab** for deployments, statefulsets and daemonsets: every
+  revision as a real object you can open, the live one marked, one-click
+  rollback to any older one.
+- **Usage columns in the tables.** Pods, workloads and nodes now show CPU and
+  memory with a bar — filled against the limit, ticked at the request, so
+  throttling and OOM risk are visible while scanning. Nodes also get pods
+  against capacity and CPU/memory allocation percentages. Deployments gained a
+  DESIRED column.
+- **Ingress rules are clickable.** The routes column lists every rule as an
+  openable URL (https when the host is in a TLS block) beside the Service it
+  lands on, one route per line — the grid now lays out variable-height rows.
+- **Port-forward moved into the page header**, beside Shell and Actions, for
+  pods and services — it is a verb you apply to the object, not a fact about
+  it, and it was buried under the container cards.
+- No metrics-server still means a hatched bar, never a confident 0%.
+
 ## v1.0.0
 
 **digg is now a browser cockpit.** The terminal UI is gone; `digg` starts the

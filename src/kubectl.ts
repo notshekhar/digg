@@ -10,6 +10,10 @@ export interface K8sObject {
         namespace?: string;
         creationTimestamp?: string;
         labels?: Record<string, string>;
+        annotations?: Record<string, string>;
+        ownerReferences?: { kind?: string; name?: string; uid?: string; controller?: boolean }[];
+        deletionTimestamp?: string;
+        uid?: string;
     };
     status?: Record<string, unknown>;
     spec?: Record<string, unknown>;
@@ -111,6 +115,10 @@ export async function topPods(
     const args = ["top", "pods", "--no-headers"];
     if (namespace) {
         args.push("-n", namespace);
+    } else {
+        // No namespace means "everything" everywhere else in digg; without -A
+        // kubectl would quietly answer for the current namespace only.
+        args.push("-A");
     }
     if (labelSelector) {
         args.push("-l", labelSelector);
@@ -122,8 +130,58 @@ export async function topPods(
     }
     for (const line of result.stdout.split("\n")) {
         const cols = line.trim().split(/\s+/);
-        if (cols.length >= 3) {
-            map.set(cols[0], { cpu: cols[1], memory: cols[2] });
+        // -A prepends the namespace. Both keys go in the map: callers that know
+        // the namespace get an exact hit, and the older name-only lookups still
+        // work (they collide only for same-named pods in different namespaces).
+        const cells = namespace ? cols : cols.slice(1);
+        if (cells.length >= 3) {
+            const metrics = { cpu: cells[1]!, memory: cells[2]! };
+            if (!namespace && cols[0]) map.set(`${cols[0]}/${cells[0]}`, metrics);
+            if (namespace) map.set(`${namespace}/${cells[0]}`, metrics);
+            map.set(cells[0]!, metrics);
+        }
+    }
+    return map;
+}
+
+/**
+ * Per-CONTAINER CPU/memory (`kubectl top pods --containers`), keyed
+ * "pod/container".
+ *
+ * A pod-level number cannot answer "which of these three containers is eating
+ * the node", which is the question a container card exists to answer, so the
+ * detail pages ask for this instead of topPods.
+ */
+export async function topPodContainers(
+    context: string,
+    opts: { namespace?: string; labelSelector?: string; pod?: string } = {},
+): Promise<Map<string, PodMetrics>> {
+    const args = ["top", "pods"];
+    if (opts.pod) args.push(opts.pod);
+    args.push("--containers", "--no-headers");
+    if (opts.namespace) {
+        args.push("-n", opts.namespace);
+    } else {
+        args.push("-A");
+    }
+    if (opts.labelSelector) {
+        args.push("-l", opts.labelSelector);
+    }
+    const result = await run(args, context);
+    const map = new Map<string, PodMetrics>();
+    if (result.code !== 0) {
+        return map;
+    }
+    for (const line of result.stdout.split("\n")) {
+        const cols = line.trim().split(/\s+/);
+        // With -A the first column is the namespace; both the qualified and the
+        // bare key go in, as topPods does.
+        const cells = opts.namespace ? cols : cols.slice(1);
+        if (cells.length >= 4) {
+            const metrics = { cpu: cells[2]!, memory: cells[3]! };
+            const ns = opts.namespace ?? cols[0];
+            if (ns) map.set(`${ns}/${cells[0]}/${cells[1]}`, metrics);
+            map.set(`${cells[0]}/${cells[1]}`, metrics);
         }
     }
     return map;

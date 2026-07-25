@@ -26,7 +26,14 @@ import { getLastContext, getWebPrefs } from "./settings.ts";
 import { handleApi } from "./web/api.ts";
 import { pageHtml } from "./web/page.ts";
 import { type ExecSocketData, parseExecTarget, startExecSession } from "./web/exec.ts";
+import { LiveSession, installShutdownHook, registry } from "./web/live.ts";
 import { stopAllForwards } from "./web/forwards.ts";
+
+/**
+ * Both socket flavours share one Bun websocket handler, so every message has to
+ * say which it belongs to. `kind` is that discriminator.
+ */
+type SocketData = (ExecSocketData & { kind?: "exec" }) | { kind: "watch"; live?: LiveSession };
 
 export const DEFAULT_PORT = 9787;
 
@@ -85,7 +92,18 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
                 if (!isAuthorized(req, url, TOKEN, boundPort)) return new Response("unauthorized", { status: 401 });
                 const target = parseExecTarget(url);
                 if (!target) return new Response("bad exec target", { status: 400 });
-                const data: ExecSocketData = { target };
+                const data: SocketData = { kind: "exec", target };
+                if (srv.upgrade(req, { data })) return undefined as unknown as Response;
+                return new Response("websocket upgrade failed", { status: 400 });
+            }
+
+            // The live channel: object watches in, row deltas out. Same guard
+            // as everything else — a WebSocket handshake ignores same-origin,
+            // so the token is the only thing standing between a hostile tab and
+            // your cluster.
+            if (url.pathname === "/api/watch") {
+                if (!isAuthorized(req, url, TOKEN, boundPort)) return new Response("unauthorized", { status: 401 });
+                const data: SocketData = { kind: "watch" };
                 if (srv.upgrade(req, { data })) return undefined as unknown as Response;
                 return new Response("websocket upgrade failed", { status: 400 });
             }
@@ -131,7 +149,17 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
 
         websocket: {
             open(ws) {
-                const data = ws.data as ExecSocketData;
+                const data = ws.data as SocketData;
+                if (data.kind === "watch") {
+                    data.live = new LiveSession((payload) => {
+                        try {
+                            ws.send(payload);
+                        } catch {
+                            /* client vanished mid-write */
+                        }
+                    });
+                    return;
+                }
                 const pty = startExecSession(
                     data,
                     (payload) => {
@@ -152,7 +180,11 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
                 if (pty) data.pty = pty;
             },
             message(ws, message) {
-                const data = ws.data as ExecSocketData;
+                const data = ws.data as SocketData;
+                if (data.kind === "watch") {
+                    if (typeof message === "string") void data.live?.handle(message);
+                    return;
+                }
                 if (!data.pty) return;
                 if (typeof message !== "string") {
                     data.pty.write(new Uint8Array(message as unknown as ArrayBuffer));
@@ -167,7 +199,13 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
                 }
             },
             close(ws) {
-                const data = ws.data as ExecSocketData;
+                const data = ws.data as SocketData;
+                if (data.kind === "watch") {
+                    // The socket is the lifetime of its subscriptions: a closed
+                    // tab must not leave a kubectl watch running.
+                    data.live?.close();
+                    return;
+                }
                 data.pty?.kill();
             },
         },
@@ -183,10 +221,14 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
     // would strand listening ports with no way to find them from the UI again.
     const shutdown = () => {
         stopAllForwards();
+        registry.shutdown();
         process.exit(0);
     };
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
+    // A watch is a kubectl child holding a pipe; without this they can outlive
+    // an unclean exit and sit there streaming into nothing.
+    installShutdownHook();
 
     if (openBrowser) openUrl(url);
 

@@ -45,6 +45,18 @@ export const Icon = {
             <path d="M2 5l6 3.5L14 5M8 8.5V14" />
         </Svg>
     ),
+    Cpu: (p: Props) => (
+        <Svg {...p}>
+            <rect x="4" y="4" width="8" height="8" />
+            <path d="M6.5 1.5v2.5M9.5 1.5v2.5M6.5 12v2.5M9.5 12v2.5M1.5 6.5H4M1.5 9.5H4M12 6.5h2.5M12 9.5h2.5" />
+        </Svg>
+    ),
+    Memory: (p: Props) => (
+        <Svg {...p}>
+            <rect x="1.5" y="4" width="13" height="8" />
+            <path d="M5 7v2M8 7v2M11 7v2" />
+        </Svg>
+    ),
     Layers: (p: Props) => (
         <Svg {...p}>
             <path d="M8 2 14.5 5.5 8 9 1.5 5.5z" />

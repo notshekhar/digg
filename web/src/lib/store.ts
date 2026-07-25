@@ -9,6 +9,7 @@
 
 import { useSyncExternalStore } from "react";
 import type { CatalogGroup, Forward, KindMeta } from "./types.ts";
+import { live } from "./live.ts";
 
 export interface TerminalSession {
     id: string;
@@ -54,6 +55,8 @@ export interface AppState {
     toasts: Toast[];
     /** Bumped to force every data view to refetch now. */
     refreshTick: number;
+    /** True for a beat after a manual refresh, purely so it is visible. */
+    refreshing: boolean;
 }
 
 const initial: AppState = {
@@ -75,6 +78,7 @@ const initial: AppState = {
     dock: { open: false, tab: "", height: 320 },
     toasts: [],
     refreshTick: 0,
+    refreshing: false,
 };
 
 let state = initial;
@@ -128,8 +132,19 @@ export function dismissToast(id: number): void {
     setState((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
 }
 
+/**
+ * Refresh everything, now.
+ *
+ * With a live stream this button looks redundant, and it is not: it is how you
+ * say "I do not trust what I am looking at". It re-asks the socket for a fresh
+ * snapshot AND kicks the polled views, then flags `refreshing` for a beat —
+ * without that flag a refresh on a healthy stream changes nothing on screen and
+ * the button feels broken.
+ */
 export function refreshNow(): void {
-    setState((s) => ({ refreshTick: s.refreshTick + 1 }));
+    setState((s) => ({ refreshTick: s.refreshTick + 1, refreshing: true }));
+    live.resync();
+    setTimeout(() => setState({ refreshing: false }), 650);
 }
 
 // ── terminals ──────────────────────────────────────────────────────────────

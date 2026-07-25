@@ -12,6 +12,7 @@ import { MultiSelect, Select } from "./ui.tsx";
 import { api } from "../lib/api.ts";
 import { refreshNow, setDock, setState, toast, useApp } from "../lib/store.ts";
 import { useNamespaces } from "../lib/query.ts";
+import { useLiveStatus } from "../lib/live-data.ts";
 import "./TopBar.css";
 
 export function TopBar({ onPalette }: { onPalette: () => void }) {
@@ -20,6 +21,10 @@ export function TopBar({ onPalette }: { onPalette: () => void }) {
     const namespaces = useApp((s) => s.namespaces);
     const [selectedNs, setSelectedNs] = useNamespaces();
     const live = useApp((s) => s.live);
+    const liveMode = useLiveStatus();
+    const refreshing = useApp((s) => s.refreshing);
+    const dockOpen = useApp((s) => s.dock.open);
+    const dockTab = useApp((s) => s.dock.tab);
     const theme = useApp((s) => s.theme);
     const cluster = useApp((s) => s.cluster);
     const forwards = useApp((s) => s.forwards);
@@ -93,7 +98,12 @@ export function TopBar({ onPalette }: { onPalette: () => void }) {
                 <button
                     className="btn ghost sm"
                     type="button"
-                    onClick={() => setDock({ open: true, tab: "forwards" })}
+                    aria-pressed={dockOpen && dockTab === "forwards"}
+                    onClick={() =>
+                        // Already looking at the forwards? Then this is the way
+                        // back out, not a no-op click.
+                        setDock({ open: !(dockOpen && dockTab === "forwards"), tab: "forwards" })
+                    }
                     title="Port-forwards"
                 >
                     <Icon.Forward size={13} />
@@ -102,26 +112,46 @@ export function TopBar({ onPalette }: { onPalette: () => void }) {
             ) : null}
 
             {/* Always available: even without pty support the console holds
-                the port-forward list, and both must be reachable from any page. */}
+                the port-forward list, and both must be reachable from any page.
+                It TOGGLES — the same button that opened the panel closes it,
+                which is what ⌘J does and what a pressed-looking button promises. */}
             <button
                 className="btn ghost icon"
                 type="button"
-                title="Console — shells and forwards (⌘J)"
-                onClick={() => setDock({ open: true })}
+                aria-pressed={dockOpen}
+                title={dockOpen ? "Hide the console (⌘J)" : "Console — shells and forwards (⌘J)"}
+                onClick={() => setDock({ open: !dockOpen })}
             >
                 <Icon.Terminal size={14} />
             </button>
 
+            {/* Streaming and polling look identical until something breaks, so
+                the mode is stated rather than implied: a dot you can read at a
+                glance, and the reason in the tooltip. */}
             <button
-                className="btn ghost icon"
+                className={`btn ghost icon livebtn ${live ? liveMode : "paused"}`}
                 type="button"
                 aria-pressed={live}
-                title={live ? "Live refresh on — click to pause" : "Live refresh paused"}
+                title={
+                    !live
+                        ? "Updates paused — click to resume"
+                        : liveMode === "live"
+                          ? "Live: streaming changes as they happen (click to pause)"
+                          : liveMode === "connecting"
+                            ? "Connecting to the live stream — polling meanwhile"
+                            : "Live stream unavailable — polling instead"
+                }
                 onClick={() => setState({ live: !live })}
             >
                 {live ? <Icon.Pause size={13} /> : <Icon.Play size={13} />}
+                <span className="livedot" />
             </button>
-            <button className="btn ghost icon" type="button" title="Refresh now (⌘⌥R)" onClick={() => refreshNow()}>
+            <button
+                className={`btn ghost icon refreshbtn ${refreshing ? "spinning" : ""}`}
+                type="button"
+                title="Refresh now (⌘⌥R)"
+                onClick={() => refreshNow()}
+            >
                 <Icon.Refresh size={14} />
             </button>
             <button className="btn ghost icon" type="button" title="Toggle theme" onClick={toggleTheme}>

@@ -108,10 +108,56 @@ interface IngressRule {
     http?: { paths?: { path?: string; backend?: { service?: { name?: string; port?: { number?: number; name?: string } } } }[] };
 }
 
-function ingressHosts(o: K8sObject): string {
+/** Flatten an ingress's rules into [HOST, PATH, SERVICE, PORT] rows. */
+export function ingressRuleRows(o: K8sObject): string[][] {
     const rules = (o.spec as { rules?: IngressRule[] })?.rules ?? [];
-    const hosts = rules.map((r) => r.host).filter(Boolean) as string[];
-    return hosts.length ? [...new Set(hosts)].join(",") : "*";
+    const rows: string[][] = [];
+    for (const rule of rules) {
+        const host = rule.host ?? "*";
+        const paths = rule.http?.paths ?? [];
+        if (paths.length === 0) {
+            rows.push([host, "/", "—", "—"]);
+            continue;
+        }
+        for (const p of paths) {
+            const svc = p.backend?.service;
+            const port = svc?.port?.number ?? svc?.port?.name ?? "";
+            rows.push([host, p.path ?? "/", svc?.name ?? "—", String(port)]);
+        }
+    }
+    return rows;
+}
+
+/**
+ * The same rules as openable routes: a real URL (https when the host is in a
+ * TLS block) plus the backend it lands on. The Ingress table renders these as
+ * links, which is the difference between reading a routing rule and using it.
+ */
+export function ingressRoutes(o: K8sObject): {
+    url: string;
+    host: string;
+    path: string;
+    service: string;
+    port: string;
+}[] {
+    const tlsHosts = new Set(((o.spec as { tls?: { hosts?: string[] }[] })?.tls ?? []).flatMap((t) => t.hosts ?? []));
+    return ingressRuleRows(o).map((row) => {
+        const [host, path, service, port] = row as [string, string, string, string];
+        const scheme = tlsHosts.has(host) ? "https" : "http";
+        return {
+            url: host === "*" ? "" : `${scheme}://${host}${path === "/" ? "/" : path}`,
+            host,
+            path,
+            service,
+            port,
+        };
+    });
+}
+
+function ingressRulesText(o: K8sObject): string {
+    const routes = ingressRoutes(o);
+    if (!routes.length) return "<none>";
+    return routes.map((r) => `${r.url || `${r.host}${r.path}`} → ${r.service}:${r.port}`).join("  ");
 }
 
 function ingressAddress(o: K8sObject): string {
@@ -207,10 +253,17 @@ export const KINDS: KindDef[] = [
         name: "deployments",
         title: "Deployments",
         kind: "Deployment",
-        columns: ["NAME", "READY", "UP-TO-DATE", "AVAILABLE", "AGE"],
+        columns: ["NAME", "READY", "DESIRED", "UPDATED", "AVAILABLE", "AGE"],
         row: (o) => {
             const s = o.status as { updatedReplicas?: number; availableReplicas?: number };
-            return [NAME(o), deployReady(o), String(s?.updatedReplicas ?? 0), String(s?.availableReplicas ?? 0), age(o)];
+            return [
+                NAME(o),
+                deployReady(o),
+                String((o.spec as { replicas?: number })?.replicas ?? 0),
+                String(s?.updatedReplicas ?? 0),
+                String(s?.availableReplicas ?? 0),
+                age(o),
+            ];
         },
     },
     {
@@ -256,12 +309,12 @@ export const KINDS: KindDef[] = [
         name: "ingresses",
         title: "Ingresses",
         kind: "Ingress",
-        columns: ["NAME", "CLASS", "HOSTS", "ADDRESS", "PORTS", "AGE"],
+        columns: ["NAME", "RULES", "CLASS", "LOAD BALANCER", "PORTS", "AGE"],
         row: (o) => [
             NAME(o),
+            ingressRulesText(o),
             none((o.spec as { ingressClassName?: string })?.ingressClassName),
-            ingressHosts(o),
-            ingressAddress(o),
+            ingressAddress(o) || "Pending",
             ingressPorts(o),
             age(o),
         ],

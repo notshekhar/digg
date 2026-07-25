@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Icon } from "../components/icons.tsx";
+import { DetailViewPane } from "../components/DetailView.tsx";
 import { Badge, CopyButton, ErrorBox, Facts, Menu, Tabs } from "../components/ui.tsx";
 import { LogPane } from "../components/LogPane.tsx";
 import { TextPane, YamlEditor } from "../components/YamlEditor.tsx";
@@ -21,6 +22,7 @@ import { api } from "../lib/api.ts";
 import { act, minePorts, openForward, openScale, resourceActions } from "../lib/actions.tsx";
 import { ageFromIso, toneOf } from "../lib/format.ts";
 import { usePolled } from "../lib/hooks.ts";
+import { useEither, useLiveDetail } from "../lib/live-data.ts";
 import { useContainer, useTab } from "../lib/query.ts";
 import { goBack, navigate } from "../lib/router.ts";
 import { getState, openTerminal, toast, useApp } from "../lib/store.ts";
@@ -32,6 +34,8 @@ const LOGGABLE = new Set(["pods", "deployments", "statefulsets", "daemonsets", "
 const DATA_KINDS = new Set(["configmaps", "secrets"]);
 const SCALABLE = new Set(["deployments", "statefulsets", "replicasets"]);
 const RESTARTABLE = new Set(["deployments", "statefulsets", "daemonsets"]);
+/** Kinds that keep a rollout history worth listing. */
+const REVISIONED = new Set(["deployments", "statefulsets", "daemonsets"]);
 
 /** Current replica count, mined from the summary so Scale opens pre-filled. */
 function replicasOf(data: { summary: [string, string][] } | null): number {
@@ -55,12 +59,26 @@ export function DetailPage({
     const [tab, setTab] = useTab();
     const [container, setContainer] = useContainer();
 
-    const { data, error } = usePolled(
+    // Same deal as the tables: the socket rebuilds this page when the object or
+    // its pods change, and polling covers everything the socket cannot.
+    const stream = useLiveDetail(target.kind, target.name, target.ns);
+    const polled = usePolled(
         () => api.detail({ context, kind: target.kind, name: target.name, ns: target.ns }),
         [context, target.kind, target.name, target.ns],
+        { enabled: !stream.streaming },
     );
+    const { data, error } = useEither(stream.data, stream.streaming, polled);
 
     const back = useCallback(() => goBack({ page: "list", kind: target.kind }), [target.kind]);
+
+    // Deleting an object from its own page (or someone else deleting it) used
+    // to leave you staring at a page that quietly stopped updating. The watch
+    // knows the moment it goes, so say so and step back to the list.
+    useEffect(() => {
+        if (!stream.gone) return;
+        toast("info", `${target.name} no longer exists`, "It was deleted while this page was open.");
+        back();
+    }, [stream.gone, target.name, back]);
 
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
@@ -73,6 +91,11 @@ export function DetailPage({
     }, [back]);
 
     const containers = useMemo(() => {
+        // The rich view names every container; the generic section only does
+        // for kinds whose one table happens to be a container list.
+        if (data?.view?.containers.length) {
+            return data.view.containers.filter((c) => !c.init).map((c) => c.name);
+        }
         if (data?.section?.title?.toLowerCase().includes("container")) {
             return data.section.rows.map((r) => r[0] ?? "").filter(Boolean);
         }
@@ -81,8 +104,10 @@ export function DetailPage({
 
     const canLogs = data?.canLogs || LOGGABLE.has(target.kind);
     const hasData = DATA_KINDS.has(target.kind);
+    const hasRevisions = REVISIONED.has(target.kind);
     const tabs = [
         { id: "overview", label: "Overview" },
+        ...(hasRevisions ? [{ id: "revisions", label: "Revisions" }] : []),
         // Data comes before YAML: for a ConfigMap or Secret it IS the object,
         // and the raw manifest is the fallback view, not the main one.
         ...(hasData ? [{ id: "data", label: "Data", badge: data?.section?.dataKeys?.keys.length }] : []),
@@ -133,6 +158,19 @@ export function DetailPage({
                         <Icon.Restart size={12} /> Restart
                     </button>
                 ) : null}
+                {/* Port-forwarding is a header verb, next to Shell: it is
+                    something you do TO the object, not a fact about it, and
+                    hunting for it under the containers made it feel buried. */}
+                {target.kind === "pods" || target.kind === "services" ? (
+                    <button
+                        className="btn sm"
+                        type="button"
+                        title="Forward a port to localhost"
+                        onClick={() => openForward(target, data ? minePorts(data.summary) : [])}
+                    >
+                        <Icon.Forward size={12} /> Port-forward
+                    </button>
+                ) : null}
                 {(target.kind === "pods" || target.kind === "nodes") && canExec ? (
                     <button
                         className="btn sm"
@@ -174,7 +212,18 @@ export function DetailPage({
 
             <div className="detail-body">
                 {tab === "overview" ? (
-                    <OverviewTab data={data} onOpen={onOpen} target={target} />
+                    <OverviewTab
+                        data={data}
+                        onOpen={onOpen}
+                        target={target}
+                        onLogs={(c) => {
+                            void setContainer(c);
+                            void setTab("logs");
+                        }}
+                        containers={containers}
+                    />
+                ) : tab === "revisions" && hasRevisions ? (
+                    <RevisionsTab target={target} onOpen={onOpen} />
                 ) : tab === "data" && hasData ? (
                     <DataTab target={target} />
                 ) : tab === "yaml" ? (
@@ -199,10 +248,14 @@ function OverviewTab({
     data,
     target,
     onOpen,
+    onLogs,
+    containers,
 }: {
     data: Awaited<ReturnType<typeof api.detail>> | null;
     target: ResourceRef;
     onOpen: (ref: ResourceRef, tab?: string) => void;
+    onLogs: (container: string) => void;
+    containers: string[];
 }) {
     const [revealed, setRevealed] = useState<Record<string, string>>({});
     const context = getState().context;
@@ -221,6 +274,41 @@ function OverviewTab({
     });
 
     const section = data.section;
+
+    // Pods, workloads and nodes get the full model; every other kind keeps the
+    // summary-and-one-table page that works for four hundred kinds.
+    if (data.view) {
+        return (
+            <div className="detail-scroll">
+                <DetailViewPane
+                    view={data.view}
+                    onOpen={(ref) => onOpen(ref)}
+                    onLogs={containers.length ? onLogs : undefined}
+                    onShell={
+                        target.kind === "pods" && getState().canExec
+                            ? (container) =>
+                                  openTerminal({
+                                      kind: "container",
+                                      title: `${target.name}/${container}`,
+                                      context,
+                                      ns: target.ns,
+                                      pod: target.name,
+                                      container,
+                                  })
+                            : undefined
+                    }
+                />
+
+                <section className="detail-section">
+                    <header className="detail-section-head">
+                        <h3>Events</h3>
+                        <span className="mono faint">{data.events.length}</span>
+                    </header>
+                    <EventsTab events={data.events} compact />
+                </section>
+            </div>
+        );
+    }
 
     return (
         <div className="detail-scroll">
@@ -332,14 +420,6 @@ function OverviewTab({
                 </section>
             ) : null}
 
-            {target.kind === "services" || target.kind === "pods" ? (
-                <div className="detail-actionrow">
-                    <button className="btn sm" type="button" onClick={() => openForward(target, data ? minePorts(data.summary) : [])}>
-                        <Icon.Forward size={12} /> Port-forward
-                    </button>
-                </div>
-            ) : null}
-
             <section className="detail-section">
                 <header className="detail-section-head">
                     <h3>Events</h3>
@@ -380,6 +460,84 @@ function EventsTab({ events, compact }: { events: { type: string; reason: string
                     </span>
                 </div>
             ))}
+        </div>
+    );
+}
+
+/**
+ * Rollout history as objects, not `kubectl rollout history` text: every
+ * revision is a ReplicaSet you can open, and the one still holding replicas is
+ * marked. Rolling back is one row action away — the reason you came here.
+ */
+function RevisionsTab({ target, onOpen }: { target: ResourceRef; onOpen: (ref: ResourceRef, tab?: string) => void }) {
+    const context = getState().context;
+    const { data, error } = usePolled(
+        () => api.revisions({ context, kind: target.kind, name: target.name, ns: target.ns }),
+        [context, target.kind, target.name, target.ns],
+    );
+
+    if (error) return <ErrorBox error={error} />;
+    if (!data) {
+        return (
+            <div className="page-loading">
+                <span className="spinner" /> Reading revisions…
+            </div>
+        );
+    }
+    if (!data.revisions.length) {
+        return <div className="detail-empty faint pad">no revision history for this workload</div>;
+    }
+
+    return (
+        <div className="detail-scroll">
+            <div className="podtable revtable">
+                <div className="podtable-head">
+                    <span>REVISION</span>
+                    <span>NAME</span>
+                    <span>REPLICAS</span>
+                    <span>IMAGES</span>
+                    <span>AGE</span>
+                    <span />
+                </div>
+                {data.revisions.map((r) => (
+                    <div className="podtable-row" key={r.name}>
+                        <span className="mono">
+                            {r.revision}
+                            {r.current ? <span className="tag current">current</span> : null}
+                        </span>
+                        <button
+                            type="button"
+                            className="link mono truncate"
+                            title={r.name}
+                            onClick={() => onOpen({ kind: r.kind, name: r.name, ns: r.ns })}
+                        >
+                            {r.name}
+                        </button>
+                        <span className="mono">{r.kind === "replicasets" ? `${r.ready}/${r.replicas}` : "—"}</span>
+                        <span className="mono truncate" title={r.images}>
+                            {r.images || "—"}
+                        </span>
+                        <span className="mono">{r.age}</span>
+                        <span className="revact">
+                            {r.current ? null : (
+                                <button
+                                    className="btn sm"
+                                    type="button"
+                                    title={`Roll ${target.name} back to revision ${r.revision}`}
+                                    onClick={() =>
+                                        void act(
+                                            { action: "rollback", ref: target, revision: String(r.revision) },
+                                            `rolled back to revision ${r.revision}`,
+                                        )
+                                    }
+                                >
+                                    <Icon.Restart size={11} /> Roll back
+                                </button>
+                            )}
+                        </span>
+                    </div>
+                ))}
+            </div>
         </div>
     );
 }

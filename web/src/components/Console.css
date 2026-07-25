@@ -139,3 +139,8 @@
 .fwd-url {
     color: var(--accent);
 }
+
+/* Collapsed, not destroyed: the terminals inside keep running (see Console.tsx). */
+.console.hidden {
+    display: none;
+}

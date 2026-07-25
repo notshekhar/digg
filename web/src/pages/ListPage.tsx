@@ -16,6 +16,7 @@ import { Empty, ErrorBox } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { confirmDelete, resourceActions } from "../lib/actions.tsx";
 import { usePolled } from "../lib/hooks.ts";
+import { useEither, useLiveList } from "../lib/live-data.ts";
 import { navigate } from "../lib/router.ts";
 import { useApp } from "../lib/store.ts";
 import { useFilter, useNamespaces, nsParam } from "../lib/query.ts";
@@ -30,6 +31,7 @@ export function ListPage({ kind, onOpen }: { kind: string; onOpen: (ref: Resourc
     const [q, setQ] = useFilter();
     const [selected, setSelected] = useState<Set<string>>(new Set());
     const [hidden, setHidden] = useState<Set<string>>(new Set());
+    const refreshing = useApp((s) => s.refreshing);
 
     const meta = useMemo(() => {
         for (const g of catalog) {
@@ -42,11 +44,16 @@ export function ListPage({ kind, onOpen }: { kind: string; onOpen: (ref: Resourc
     const apiVersion = meta && "apiVersion" in meta ? ((meta as { apiVersion?: string }).apiVersion ?? "") : "";
     const nsForApi = nsParam(selectedNs);
 
-    const { data, error, initial, loading } = usePolled(
+    // Live first: a watch pushes changes the moment they happen. Polling stays
+    // wired up underneath and takes over whenever the socket cannot serve this
+    // table — a kind with no watch verb, a dropped connection, or pause.
+    const stream = useLiveList(kind, nsForApi);
+    const polled = usePolled(
         () => api.list({ context, kind, ns: nsForApi }),
         [context, kind, nsForApi],
-        { enabled: Boolean(context && kind) },
+        { enabled: Boolean(context && kind) && !stream.streaming },
     );
+    const { data, error, initial, loading } = useEither(stream.data, stream.streaming, polled);
 
     // Clear selection when the subject changes; a checked box that survives a
     // kind switch is a bulk delete waiting to happen. The filter is NOT cleared
@@ -108,7 +115,13 @@ export function ListPage({ kind, onOpen }: { kind: string; onOpen: (ref: Resourc
                 {data ? <ColumnsMenu columns={data.columns} hidden={hidden} onChange={setHidden} /> : null}
             </div>
 
-            {loading && !initial ? <div className="hairline" /> : <div style={{ height: 2, flex: "0 0 auto" }} />}
+            {/* The hairline is the second half of the refresh acknowledgement:
+                the icon spins up here, and the table says it is working. */}
+            {(loading && !initial) || refreshing ? (
+                <div className="hairline" />
+            ) : (
+                <div style={{ height: 2, flex: "0 0 auto" }} />
+            )}
 
             {selected.size > 0 ? (
                 <div className="bulkbar">
@@ -141,6 +154,7 @@ export function ListPage({ kind, onOpen }: { kind: string; onOpen: (ref: Resourc
                     selected={selected}
                     onSelectedChange={setSelected}
                     onOpen={(row) => navigate({ page: "detail", kind, name: row.name, ns: row.ns })}
+                    onOpenRef={(ref) => navigate({ page: "detail", kind: ref.kind, name: ref.name, ns: ref.ns })}
                     rowMenu={(row) => resourceActions(refOf(row), { kind, open: (ref, tab) => onOpen(ref, tab) })}
                     empty={
                         <Empty

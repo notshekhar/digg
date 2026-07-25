@@ -1,0 +1,416 @@
+/*
+ * The rich detail page. Three repeating shapes: a fact grid, a container card
+ * and a pod table — everything else is spacing. No shadows, no radii.
+ */
+
+.factgrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px 18px;
+    align-items: start;
+}
+.factgrid.boxed {
+    border: 1px solid var(--line);
+    background: var(--bg-elev);
+    padding: 11px 13px;
+}
+.factcell {
+    min-width: 0;
+}
+.factcell.wide {
+    grid-column: span 2;
+}
+@media (max-width: 900px) {
+    .factcell.wide {
+        grid-column: auto;
+    }
+}
+
+.factlabel {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg-faint);
+    margin-bottom: 3px;
+}
+.factvalue {
+    font-size: 12.5px;
+    color: var(--fg);
+    min-width: 0;
+    word-break: break-word;
+}
+
+.chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+.chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    padding: 1px 5px;
+    background: var(--bg-sunk);
+    border: 1px solid var(--line-soft);
+    font-size: 11px;
+    max-width: 100%;
+}
+.chip-k {
+    color: var(--fg-muted);
+    /* An annotation key must not wrap: a broken key turns the identity card
+       into a paragraph and the value it belongs to becomes unreadable. */
+    white-space: nowrap;
+}
+.chip-v {
+    color: var(--fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 420px;
+}
+.chip.ok {
+    border-color: var(--ok-soft);
+    color: var(--ok);
+}
+.chip.ok .chip-v {
+    color: var(--ok);
+}
+.chip.warn {
+    border-color: var(--warn-soft);
+}
+.chip.warn .chip-v {
+    color: var(--warn);
+}
+.chip.bad {
+    border-color: var(--bad-soft);
+}
+.chip.bad .chip-v {
+    color: var(--bad);
+}
+
+.factlines {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.factline {
+    font-size: 11.5px;
+    color: var(--fg-muted);
+}
+
+.link {
+    background: none;
+    border: 0;
+    padding: 0;
+    color: var(--accent);
+    cursor: pointer;
+    font-size: inherit;
+    text-align: left;
+    max-width: 100%;
+}
+.link:hover {
+    color: var(--accent-strong);
+    text-decoration: underline;
+}
+
+.vsection {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+}
+.vsection-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    border-bottom: 1px solid var(--line-soft);
+    padding-bottom: 5px;
+}
+.vsection-head h2 {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+}
+.vsection-note {
+    font-size: 11px;
+}
+
+/* ── gauges ─────────────────────────────────────────────────────────────── */
+
+.gauge {
+    display: block;
+    position: relative;
+    height: 7px;
+    background: var(--bg-sunk);
+    border: 1px solid var(--line-soft);
+    overflow: hidden;
+}
+.gauge-fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    background: var(--accent);
+}
+.gauge-fill.ok {
+    background: var(--ok);
+}
+.gauge-fill.warn {
+    background: var(--warn);
+}
+.gauge-fill.bad {
+    background: var(--bad);
+}
+/* Unknown is hatched, never empty: an empty bar reads as zero. */
+.gauge.unknown {
+    background: repeating-linear-gradient(
+        135deg,
+        var(--bg-sunk),
+        var(--bg-sunk) 3px,
+        var(--line-soft) 3px,
+        var(--line-soft) 6px
+    );
+}
+.gauge-mark {
+    position: absolute;
+    top: -1px;
+    bottom: -1px;
+    width: 1px;
+    background: var(--fg-muted);
+}
+
+.qty {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 14px;
+    color: var(--fg);
+}
+.qty-unit {
+    font-size: 10px;
+    color: var(--fg-faint);
+    margin-left: 1px;
+}
+
+/* ── container cards ────────────────────────────────────────────────────── */
+
+.ccards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+    gap: 10px;
+}
+.ccard {
+    border: 1px solid var(--line);
+    background: var(--bg-elev);
+    display: flex;
+    flex-direction: column;
+}
+.ccard-head {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line-soft);
+    background: var(--bg-sunk);
+    min-width: 0;
+}
+.ccard-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    color: var(--fg);
+}
+.ccard-image {
+    display: block;
+    font-size: 11px;
+    color: var(--fg-faint);
+    margin-top: 2px;
+}
+.tag {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--fg-faint);
+    border: 1px solid var(--line);
+    padding: 0 3px;
+}
+
+.ccard-status {
+    padding: 9px 10px;
+    border-bottom: 1px solid var(--line-soft);
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+}
+.ccard-statusrow {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+}
+.ccard-statusrow > div:first-child {
+    flex: 1;
+    min-width: 0;
+}
+.statuswords {
+    display: flex;
+    gap: 9px;
+    font-size: 12.5px;
+    flex-wrap: wrap;
+}
+.ccard-actions {
+    display: flex;
+    gap: 4px;
+}
+.ccard-restarts {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--fg-muted);
+}
+.ccard-restarts .mono {
+    font-size: 12px;
+}
+
+.ccard-usage {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+}
+.usebox {
+    padding: 9px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    min-width: 0;
+}
+.usebox + .usebox {
+    border-left: 1px solid var(--line-soft);
+}
+.usehead {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+}
+.uselabel {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11.5px;
+    color: var(--fg-muted);
+    min-width: 0;
+}
+.uselabel svg {
+    color: var(--accent);
+    flex: 0 0 auto;
+}
+.alloc {
+    font-size: 11.5px;
+    color: var(--fg-muted);
+}
+.alloc-title {
+    color: var(--fg-faint);
+    margin-bottom: 2px;
+}
+.alloc-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+}
+.alloc-row .qty {
+    font-size: 11.5px;
+}
+.ccard-foot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-top: 1px solid var(--line-soft);
+    font-size: 11.5px;
+    color: var(--fg-muted);
+}
+.ccard-foot .factlabel {
+    margin: 0;
+}
+
+/* ── pods table ─────────────────────────────────────────────────────────── */
+
+.podcounts {
+    display: flex;
+    gap: 16px;
+    font-size: 12.5px;
+    color: var(--fg-muted);
+}
+.podcounts strong {
+    color: var(--fg);
+    font-weight: 600;
+    margin-right: 3px;
+}
+
+.podtable {
+    border: 1px solid var(--line);
+    background: var(--bg-elev);
+    overflow-x: auto;
+}
+.podtable-head,
+.podtable-row {
+    display: grid;
+    grid-template-columns:
+        minmax(200px, 2.2fr) 64px minmax(90px, 0.8fr) minmax(120px, 1fr) minmax(120px, 1fr)
+        74px 90px minmax(110px, 1fr) minmax(110px, 1fr);
+    gap: 10px;
+    align-items: center;
+    padding: 5px 10px;
+    min-width: 940px;
+}
+.podtable-head {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg-faint);
+    background: var(--bg-sunk);
+    border-bottom: 1px solid var(--line-soft);
+}
+.podtable-row {
+    border-bottom: 1px solid var(--line-soft);
+    font-size: 12px;
+    color: var(--fg-muted);
+}
+.podtable-row:last-child {
+    border-bottom: 0;
+}
+.podtable-row:hover {
+    background: var(--bg-hover);
+}
+/* Revisions reuse the pod table's chrome with their own column set. */
+.revtable .podtable-head,
+.revtable .podtable-row {
+    grid-template-columns: 92px minmax(200px, 2fr) 84px minmax(180px, 2fr) 70px 110px;
+    min-width: 760px;
+}
+.tag.current {
+    margin-left: 6px;
+    color: var(--ok);
+    border-color: var(--ok-soft);
+}
+.revact {
+    display: flex;
+    justify-content: flex-end;
+}
+
+/* Value then bar on one line, as in the tables above. */
+.cellgauge {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+}
+.cellgauge .qty {
+    font-size: 12px;
+    min-width: 44px;
+    text-align: right;
+    flex: 0 0 auto;
+}
+.cellgauge .gauge {
+    flex: 1 1 auto;
+    min-width: 30px;
+    height: 6px;
+}

@@ -20,7 +20,15 @@ import {
     listResources,
     topPods,
 } from "../kubectl.ts";
-import { type KindDef, KINDS, WORKLOAD_KINDS, age, findKind, genericKind, podContainers } from "../format.ts";
+import {
+    type KindDef,
+    KINDS,
+    WORKLOAD_KINDS,
+    age,
+    findKind,
+    genericKind,
+    podContainers,
+} from "../format.ts";
 import {
     detailModel,
     ingressRuleRows,
@@ -28,6 +36,7 @@ import {
     jobStatus,
     podMountsPVC,
 } from "../details.ts";
+import { RICH_KINDS } from "../detail-view.ts";
 import { apiResources } from "../discovery.ts";
 import { decodeEntry, decodeSecretValue } from "../secret-yaml.ts";
 import { logSpecFor } from "../log-stream.ts";
@@ -38,6 +47,9 @@ import {
     topNodes,
 } from "../kubectl.ts";
 import { buildCatalog } from "./catalog.ts";
+import { buildDetailPayload, buildRevisions } from "./detail.ts";
+import { usageColumns } from "./gauges.ts";
+import { buildRow, columnsFor } from "./rows.ts";
 import { buildOverview } from "./overview.ts";
 import { runAction } from "./actions.ts";
 import { listForwards, pruneForwards, startForward, stopForward } from "./forwards.ts";
@@ -84,20 +96,6 @@ function kindMeta(k: KindDef) {
     };
 }
 
-function statusTone(value: string): "ok" | "warn" | "bad" | "neutral" {
-    const v = value.toLowerCase();
-    if (v === "running" || v === "active" || v === "ready" || v === "bound" || v === "succeeded" || v === "true") {
-        return "ok";
-    }
-    if (v === "pending" || v === "containercreating" || v === "terminating" || v === "notready" || v === "false") {
-        return "warn";
-    }
-    if (v.includes("error") || v.includes("failed") || v === "crashloopbackoff" || v === "evicted" || v === "oomkilled") {
-        return "bad";
-    }
-    return "neutral";
-}
-
 function refFromParams(url: URL): ResourceRef | null {
     const context = url.searchParams.get("context")?.trim();
     const kind = url.searchParams.get("kind")?.trim();
@@ -125,235 +123,6 @@ async function listWithOpts(
         labelSelector: extra?.labelSelector,
         fieldSelector: extra?.fieldSelector,
     });
-}
-
-async function buildSection(
-    kindName: string,
-    obj: K8sObject,
-    context: string,
-    isWorkload: boolean,
-): Promise<{
-    summary: [string, string][];
-    section: {
-        title: string;
-        columns: string[];
-        rows: string[][];
-        tones?: (number | null)[];
-        drill?: { kind: string; name: string; ns?: string }[];
-        dataKeys?: { keys: string[]; decode: boolean };
-    } | null;
-    events: K8sEvent[];
-    canLogs: boolean;
-}> {
-    let top = new Map<string, PodMetrics>();
-    const model = detailModel(kindName, obj, isWorkload, top);
-    const ns = obj.metadata?.namespace;
-    let section: {
-        title: string;
-        columns: string[];
-        rows: string[][];
-        tones?: (number | null)[];
-        drill?: { kind: string; name: string; ns?: string }[];
-        dataKeys?: { keys: string[]; decode: boolean };
-    } | null = null;
-
-    const sec = model.section;
-    if (sec) {
-        switch (sec.type) {
-            case "workloadPods":
-            case "endpointPods": {
-                const pods = await listResources("pods", {
-                    context,
-                    namespace: ns,
-                    labelSelector: sec.selector,
-                }).catch(() => [] as K8sObject[]);
-                top = await topPods(context, ns, sec.selector);
-                const podsKind = findKind("pods")!;
-                const columns = ["NAME", "READY", "STATUS", "RESTARTS", "CPU", "MEM", "NODE", "AGE"];
-                const rows = pods.map((p) => {
-                    const base = podsKind.row(p);
-                    const m = top.get(p.metadata?.name ?? "");
-                    return [base[0], base[1], base[2], base[3], m?.cpu ?? "—", m?.memory ?? "—", base[5], base[6]];
-                });
-                section = {
-                    title: sec.title,
-                    columns,
-                    rows,
-                    tones: rows.map((r) => 2),
-                    drill: pods.map((p) => ({
-                        kind: "pods",
-                        name: p.metadata?.name ?? "",
-                        ns: p.metadata?.namespace,
-                    })),
-                };
-                break;
-            }
-            case "podContainers": {
-                top = await topPods(context, ns);
-                const containers = podContainers(obj);
-                section = {
-                    title: sec.title,
-                    columns: ["CONTAINER", "IMAGE", "READY", "RESTARTS"],
-                    rows: containers.map((c) => [c.name, c.image, c.ready, c.restarts]),
-                    tones: containers.map(() => 2),
-                };
-                break;
-            }
-            case "nodePods": {
-                const pods = await listResources("pods", {
-                    context,
-                    fieldSelector: `spec.nodeName=${sec.node}`,
-                }).catch(() => [] as K8sObject[]);
-                const podsKind = findKind("pods")!;
-                section = {
-                    title: sec.title,
-                    columns: ["NAMESPACE", "NAME", "STATUS", "RESTARTS", "AGE"],
-                    rows: pods.map((p) => {
-                        const base = podsKind.row(p);
-                        return [p.metadata?.namespace ?? "", base[0], base[2], base[3], age(p)];
-                    }),
-                    tones: pods.map(() => 2),
-                    drill: pods.map((p) => ({
-                        kind: "pods",
-                        name: p.metadata?.name ?? "",
-                        ns: p.metadata?.namespace,
-                    })),
-                };
-                break;
-            }
-            case "pvcConsumers": {
-                const pods = (await listResources("pods", { context, namespace: ns }).catch(() => [] as K8sObject[])).filter(
-                    (p) => podMountsPVC(p, sec.pvc),
-                );
-                const podsKind = findKind("pods")!;
-                const columns = ["NAME", "READY", "STATUS", "RESTARTS", "CPU", "MEM", "NODE", "AGE"];
-                const rows = pods.map((p) => {
-                    const base = podsKind.row(p);
-                    return [base[0], base[1], base[2], base[3], "—", "—", base[5], base[6]];
-                });
-                section = {
-                    title: sec.title,
-                    columns,
-                    rows,
-                    tones: rows.map(() => 2),
-                    drill: pods.map((p) => ({
-                        kind: "pods",
-                        name: p.metadata?.name ?? "",
-                        ns: p.metadata?.namespace,
-                    })),
-                };
-                break;
-            }
-            case "cronjobJobs": {
-                const name = obj.metadata?.name ?? "";
-                const jobs = (await listResources("jobs", { context, namespace: ns }).catch(() => [] as K8sObject[]))
-                    .filter((j) => jobOwnedByCronJob(j, name))
-                    .sort(
-                        (a, b) =>
-                            new Date(b.metadata?.creationTimestamp ?? 0).getTime() -
-                            new Date(a.metadata?.creationTimestamp ?? 0).getTime(),
-                    );
-                section = {
-                    title: sec.title,
-                    columns: ["NAME", "STATUS", "SUCCEEDED", "AGE"],
-                    rows: jobs.map((j) => [
-                        j.metadata?.name ?? "",
-                        jobStatus(j),
-                        String((j.status as { succeeded?: number })?.succeeded ?? 0),
-                        age(j),
-                    ]),
-                    tones: jobs.map(() => 1),
-                    drill: jobs.map((j) => ({
-                        kind: "jobs",
-                        name: j.metadata?.name ?? "",
-                        ns: j.metadata?.namespace,
-                    })),
-                };
-                break;
-            }
-            case "dataKeys": {
-                const data = (obj.data as Record<string, string>) ?? {};
-                const keys = Object.keys(data).sort();
-                section = {
-                    title: sec.title,
-                    columns: ["KEY", "SIZE"],
-                    rows: keys.map((k) => {
-                        const raw = data[k] ?? "";
-                        const bytes = sec.decode
-                            ? Buffer.from(raw, "base64").byteLength
-                            : Buffer.byteLength(raw);
-                        return [k, `${bytes} B`];
-                    }),
-                    dataKeys: { keys, decode: sec.decode },
-                };
-                break;
-            }
-            case "ingressRules": {
-                /*
-                 * A routing table that says whether each route actually works.
-                 *
-                 * The rules alone are just intent — the useful question is
-                 * whether the backend Service exists and has endpoints behind
-                 * it, because a typo'd service name or a selector that matches
-                 * nothing is the ordinary way an Ingress breaks, and kubectl
-                 * will not tell you. Two list calls answer it for every row.
-                 */
-                const [services, endpoints] = await Promise.all([
-                    listResources("services", { context, namespace: ns }).catch(() => [] as K8sObject[]),
-                    listResources("endpoints", { context, namespace: ns }).catch(() => [] as K8sObject[]),
-                ]);
-                const svcByName = new Map(services.map((s) => [s.metadata?.name ?? "", s]));
-                const readyByName = new Map(
-                    endpoints.map((e) => {
-                        const subsets = (e.subsets as { addresses?: unknown[] }[] | undefined) ?? [];
-                        const ready = subsets.reduce((n, sub) => n + (sub.addresses?.length ?? 0), 0);
-                        return [e.metadata?.name ?? "", ready];
-                    }),
-                );
-                const tlsHosts = new Set(
-                    ((obj.spec as { tls?: { hosts?: string[] }[] })?.tls ?? []).flatMap((t) => t.hosts ?? []),
-                );
-
-                const rows: string[][] = [];
-                const drill: { kind: string; name: string; ns?: string }[] = [];
-                for (const rule of ingressRuleRows(obj)) {
-                    const [host, path, svcName, port] = rule as [string, string, string, string];
-                    const svc = svcByName.get(svcName);
-                    const ready = readyByName.get(svcName) ?? 0;
-                    const backend = !svc ? "no such service" : ready === 0 ? "no endpoints" : `${ready} endpoints`;
-                    const scheme = tlsHosts.has(host) ? "https" : "http";
-                    const url = host === "*" ? "" : `${scheme}://${host}${path === "/" ? "" : path}`;
-                    rows.push([host, path, `${svcName}:${port}`, backend, url]);
-                    drill.push({ kind: "services", name: svcName, ns });
-                }
-
-                section = {
-                    title: sec.title,
-                    columns: ["HOST", "PATH", "BACKEND", "STATUS", "URL"],
-                    rows,
-                    tones: rows.map(() => 3),
-                    drill,
-                };
-                break;
-            }
-        }
-    }
-
-    // Rebuild summary with live top metrics for pods/workloads.
-    const summary = detailModel(kindName, obj, isWorkload, top).summary;
-    const singular = findKind(kindName)?.kind ?? obj.kind ?? kindName;
-    const events = await getEvents(
-        {
-            kind: kindName,
-            name: obj.metadata?.name ?? "",
-            namespace: ns,
-            context,
-        },
-        singular,
-    ).catch(() => [] as K8sEvent[]);
-
-    const canLogs = Boolean(logSpecFor(kindName, obj, context));
-    return { summary, section, events, canLogs };
 }
 
 export async function handleApi(req: Request): Promise<Response | null> {
@@ -462,38 +231,15 @@ export async function handleApi(req: Request): Promise<Response | null> {
             const kind = resolveKind(kindName, discovered);
             if (!kind) return bad(`unknown kind: ${kindName}`, 404);
             const items = await listWithOpts(kind, context, namespace);
-            const columns = kind.clusterScoped ? kind.columns : ["NAMESPACE", ...kind.columns];
-            const rows: {
-                cells: string[];
-                name: string;
-                ns?: string;
-                tones: Record<number, string>;
-                ts: number;
-                labels?: Record<string, string>;
-            }[] = [];
-            for (const obj of items) {
-                const name = obj.metadata?.name ?? "";
-                const objNs = obj.metadata?.namespace;
-                if (q && !name.toLowerCase().includes(q) && !(objNs ?? "").toLowerCase().includes(q)) continue;
-                const base = kind.row(obj);
-                const cells = kind.clusterScoped ? base : [objNs ?? "", ...base];
-                const tones: Record<number, string> = {};
-                cells.forEach((c, i) => {
-                    const t = statusTone(c);
-                    if (t !== "neutral") tones[i] = t;
-                });
-                // The creation timestamp travels with the row so the grid can
-                // sort by real age. Sorting the rendered "5d" string puts 9m
-                // after 5d, which is the kind of wrong that looks right.
-                rows.push({
-                    cells,
-                    name,
-                    ns: objNs,
-                    tones,
-                    ts: obj.metadata?.creationTimestamp ? new Date(obj.metadata.creationTimestamp).getTime() : 0,
-                    labels: obj.metadata?.labels,
-                });
-            }
+            const usage = await usageColumns(kind.name, items, context, namespace);
+            const { columns, insertAt } = columnsFor(kind, usage);
+            const rows = items
+                .filter((obj) => {
+                    if (!q) return true;
+                    const name = (obj.metadata?.name ?? "").toLowerCase();
+                    return name.includes(q) || (obj.metadata?.namespace ?? "").toLowerCase().includes(q);
+                })
+                .map((obj) => buildRow(obj, kind, usage, insertAt));
             return json({
                 kind: kindMeta(kind),
                 columns,
@@ -508,18 +254,7 @@ export async function handleApi(req: Request): Promise<Response | null> {
             const discovered = await apiResources(ref.context).catch(() => []);
             const kind = resolveKind(ref.kind, discovered);
             if (!kind) return bad(`unknown kind: ${ref.kind}`, 404);
-            const obj = await getJson(ref);
-            const isWorkload = WORKLOAD_KINDS.has(kind.name);
-            const built = await buildSection(kind.name, obj, ref.context, isWorkload);
-            return json({
-                kind: kindMeta(kind),
-                name: obj.metadata?.name ?? ref.name,
-                ns: obj.metadata?.namespace,
-                summary: built.summary,
-                section: built.section,
-                events: built.events,
-                canLogs: built.canLogs,
-            });
+            return json(await buildDetailPayload(kind, ref));
         }
 
         if (pathname === "/api/yaml" && req.method === "GET") {
@@ -714,6 +449,13 @@ export async function handleApi(req: Request): Promise<Response | null> {
             const ref = refFromParams(url);
             if (!ref) return bad("context, kind, name required");
             return json({ revisions: await rolloutHistory(ref) });
+        }
+
+        if (pathname === "/api/revisions" && req.method === "GET") {
+            const ref = refFromParams(url);
+            if (!ref) return bad("context, kind, name required");
+            const obj = await getJson(ref);
+            return json({ revisions: await buildRevisions(ref.kind, obj, ref.context) });
         }
 
         // ── writes ──────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { K8sObject } from "./kubectl.ts";
-import { findKind, genericKind, jobStatus, nodeRoles, podPhase, pvcAccessModes } from "./format.ts";
+import { findKind, genericKind, ingressRoutes, jobStatus, nodeRoles, podPhase, pvcAccessModes } from "./format.ts";
 
 describe("podPhase", () => {
     test("surfaces a waiting reason over phase", () => {
@@ -85,5 +85,48 @@ describe("genericKind", () => {
     test("cluster-scoped when not namespaced", () => {
         const k = genericKind({ name: "clusterthings", kind: "ClusterThing", namespaced: false });
         expect(k.clusterScoped).toBe(true);
+    });
+});
+
+describe("ingressRoutes", () => {
+    const ing = {
+        spec: {
+            tls: [{ hosts: ["secure.example.com"], secretName: "tls" }],
+            rules: [
+                {
+                    host: "secure.example.com",
+                    http: { paths: [{ path: "/", backend: { service: { name: "web", port: { number: 8080 } } } }] },
+                },
+                {
+                    host: "plain.example.com",
+                    http: { paths: [{ path: "/api", backend: { service: { name: "api", port: { name: "http" } } } }] },
+                },
+            ],
+        },
+    } as unknown as K8sObject;
+
+    test("a TLS host gets an https URL, everything else http", () => {
+        const routes = ingressRoutes(ing);
+        expect(routes[0]).toEqual({
+            url: "https://secure.example.com/",
+            host: "secure.example.com",
+            path: "/",
+            service: "web",
+            port: "8080",
+        });
+        expect(routes[1]!.url).toBe("http://plain.example.com/api");
+        expect(routes[1]!.port).toBe("http");
+    });
+
+    test("a wildcard host has no URL to open", () => {
+        const wild = { spec: { rules: [{ http: { paths: [{ path: "/", backend: {} }] } }] } } as unknown as K8sObject;
+        expect(ingressRoutes(wild)[0]).toMatchObject({ host: "*", url: "" });
+    });
+
+    test("the ingress row lists every route", () => {
+        const row = findKind("ingresses")!.row(ing);
+        expect(row[1]).toContain("https://secure.example.com/ → web:8080");
+        expect(row[1]).toContain("http://plain.example.com/api → api:http");
+        expect(row[3]).toBe("Pending");
     });
 });

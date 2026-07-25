@@ -16,6 +16,7 @@ import type {
     ListResult,
     Overview,
     ResourceRef,
+    RevisionRow,
 } from "./types.ts";
 
 declare global {
@@ -114,6 +115,10 @@ export const api = {
 
     history: (p: { context: string; kind: string; name: string; ns?: string }) =>
         req<{ revisions: { revision: string; change: string }[] }>("/api/history", p),
+
+    /** ReplicaSets (or ControllerRevisions) behind a workload's rollout. */
+    revisions: (p: { context: string; kind: string; name: string; ns?: string }) =>
+        req<{ revisions: RevisionRow[] }>("/api/revisions", p),
 
     action: (body: Record<string, unknown>) =>
         req<ActionResult>("/api/action", {}, { method: "POST", body: JSON.stringify(body) }),

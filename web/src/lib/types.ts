@@ -36,6 +36,20 @@ export interface Boot {
     forwards: Forward[];
 }
 
+/** A usage bar for one cell: fill percentage, plus an optional request mark. */
+export interface Meter {
+    pct: number | null;
+    mark: number | null;
+}
+
+export interface Route {
+    url: string;
+    host: string;
+    path: string;
+    service: string;
+    port: string;
+}
+
 export interface Row {
     cells: string[];
     name: string;
@@ -43,6 +57,12 @@ export interface Row {
     tones: Record<number, Tone>;
     ts: number;
     labels?: Record<string, string>;
+    /** Bars keyed by column index (CPU/memory usage columns). */
+    meters?: Record<number, Meter>;
+    /** Ingress routes, rendered as links in the RULES column. */
+    rules?: Route[];
+    /** Row height in text lines; the grid lays out variable-height rows. */
+    lines?: number;
 }
 
 export type Tone = "ok" | "warn" | "bad" | "neutral";
@@ -83,8 +103,98 @@ export interface Detail {
     ns?: string;
     summary: [string, string][];
     section: Section | null;
+    /** The rich page model — pods, workloads and nodes. Null for other kinds. */
+    view: DetailView | null;
     events: K8sEvent[];
     canLogs: boolean;
+}
+
+// ── rich detail view (src/detail-view.ts) ──────────────────────────────────
+
+export interface Chip {
+    k?: string;
+    v: string;
+    tone?: Tone;
+}
+
+export interface Fact {
+    label: string;
+    text?: string;
+    tone?: Tone;
+    ref?: ResourceRef;
+    chips?: Chip[];
+    items?: string[];
+    wide?: boolean;
+}
+
+export interface FactGroup {
+    title?: string;
+    facts: Fact[];
+}
+
+/** Live usage against what the container reserved and what it may take. */
+export interface Gauge {
+    used: number | null;
+    requests: number;
+    limits: number;
+}
+
+export interface ContainerView {
+    name: string;
+    image: string;
+    init: boolean;
+    state?: string;
+    stateTone?: Tone;
+    started?: boolean;
+    ready?: boolean;
+    restarts?: number;
+    lastRestart?: string;
+    restartReason?: string;
+    cpu: Gauge;
+    mem: Gauge;
+    ports?: string;
+    mounts?: string[];
+}
+
+export interface PodLine {
+    name: string;
+    ns?: string;
+    ready: string;
+    status: string;
+    tone: Tone;
+    restarts: number;
+    lastRestart: string;
+    lastRestartReason: string;
+    node: string;
+    cpu: Gauge;
+    mem: Gauge;
+}
+
+export interface DetailView {
+    header: FactGroup;
+    groups: FactGroup[];
+    containers: ContainerView[];
+    containersNote?: string;
+    pods?: {
+        desired: number;
+        updated: number;
+        ready: number;
+        available: number;
+        rows: PodLine[];
+    };
+}
+
+export interface RevisionRow {
+    revision: number;
+    name: string;
+    kind: string;
+    ns?: string;
+    replicas: number;
+    ready: number;
+    images: string;
+    age: string;
+    ts: number;
+    current: boolean;
 }
 
 export interface NodeCard {

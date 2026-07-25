@@ -35,3 +35,50 @@
     color: var(--fg-faint);
     padding: 0 4px;
 }
+
+/* Live indicator: a dot on the pause button. Green while the watch stream is
+   feeding the UI, amber while it connects or has fallen back to polling, grey
+   when updates are paused. */
+.livebtn {
+    position: relative;
+}
+.livedot {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 5px;
+    height: 5px;
+    background: var(--fg-faint);
+}
+.livebtn.live .livedot {
+    background: var(--ok);
+}
+.livebtn.connecting .livedot {
+    background: var(--warn);
+    animation: livepulse 1.1s ease-in-out infinite;
+}
+.livebtn.offline .livedot {
+    background: var(--warn);
+}
+.livebtn.paused .livedot {
+    background: var(--fg-faint);
+}
+@keyframes livepulse {
+    50% {
+        opacity: 0.25;
+    }
+}
+
+/* A refresh on a healthy live stream changes nothing on screen, which makes the
+   button feel dead. One turn of the icon is the acknowledgement. */
+.refreshbtn svg {
+    transition: transform 0.2s ease;
+}
+.refreshbtn.spinning svg {
+    animation: refreshspin 0.65s cubic-bezier(0.4, 0, 0.2, 1);
+}
+@keyframes refreshspin {
+    to {
+        transform: rotate(360deg);
+    }
+}

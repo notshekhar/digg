@@ -24,7 +24,7 @@ import type { ReactNode } from "react";
 import { Icon } from "./icons.tsx";
 import { Menu } from "./ui.tsx";
 import type { MenuItem } from "./ui.tsx";
-import type { Row, Tone } from "../lib/types.ts";
+import type { ResourceRef, Row, Tone } from "../lib/types.ts";
 import { readyTone } from "../lib/format.ts";
 import "./DataGrid.css";
 
@@ -57,6 +57,69 @@ function sortValue(cell: string): number | string {
     return t.toLowerCase();
 }
 
+/**
+ * A usage bar inside a table cell: the number, then the bar it belongs to.
+ *
+ * The tick is the container's request. Fill past it means the workload is using
+ * more than it reserved — fine until the node is full, which is exactly the
+ * comparison the bar exists to make visible at a glance.
+ */
+function CellMeter({ pct, mark }: { pct: number | null; mark: number | null }) {
+    const tone = pct === null ? "unknown" : pct >= 90 ? "bad" : pct >= 75 ? "warn" : "ok";
+    return (
+        <span className={`cellmeter ${pct === null ? "unknown" : ""}`}>
+            {pct !== null ? <span className={`cellmeter-fill ${tone}`} style={{ width: `${Math.min(100, pct)}%` }} /> : null}
+            {mark !== null && mark > 0 ? (
+                <span className="cellmeter-mark" style={{ left: `${Math.min(100, mark)}%` }} title="requested" />
+            ) : null}
+        </span>
+    );
+}
+
+/** Ingress routes: an openable URL and the backend it lands on, per line. */
+function RouteCell({
+    routes,
+    ns,
+    onOpenRef,
+}: {
+    routes: Row["rules"];
+    ns?: string;
+    onOpenRef?: (ref: ResourceRef) => void;
+}) {
+    if (!routes?.length) return <span className="truncate faint">no rules</span>;
+    return (
+        <span className="routes">
+            {routes.map((r, i) => (
+                <span className="route" key={i}>
+                    <a
+                        className="route-url truncate"
+                        href={r.url || undefined}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={r.url || `${r.host}${r.path}`}
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        {r.url || `${r.host}${r.path}`}
+                    </a>
+                    <span className="route-arrow">→</span>
+                    <button
+                        type="button"
+                        className="route-svc truncate"
+                        title={`Open service ${r.service}`}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenRef?.({ kind: "services", name: r.service, ns });
+                        }}
+                    >
+                        {r.service}
+                        {r.port ? `:${r.port}` : ""}
+                    </button>
+                </span>
+            ))}
+        </span>
+    );
+}
+
 /** Column widths keyed on the header kubectl gave us. */
 const WIDTHS: Record<string, string> = {
     NAME: "minmax(180px, 2.4fr)",
@@ -72,9 +135,18 @@ const WIDTHS: Record<string, string> = {
     IMAGE: "minmax(180px, 1.6fr)",
     CPU: "78px",
     MEM: "78px",
+    "CPU USAGE": "minmax(120px, 0.9fr)",
+    "MEMORY USAGE": "minmax(120px, 0.9fr)",
+    "CPU ALLOC": "minmax(96px, 0.7fr)",
+    "MEM ALLOC": "minmax(96px, 0.7fr)",
+    PODS: "minmax(96px, 0.7fr)",
+    RULES: "minmax(260px, 3fr)",
+    "LOAD BALANCER": "minmax(110px, 0.8fr)",
+    DESIRED: "72px",
+    UPDATED: "72px",
+    AVAILABLE: "80px",
     TYPE: "minmax(96px, 0.7fr)",
     DATA: "60px",
-    RULES: "60px",
     COUNT: "60px",
     "CLUSTER-IP": "minmax(112px, 0.8fr)",
     "EXTERNAL-IP": "minmax(112px, 0.8fr)",
@@ -105,6 +177,8 @@ export interface DataGridProps {
     empty?: ReactNode;
     /** Ages come from row.ts, so the AGE column re-renders live. */
     ageColumn?: number;
+    /** Follow a link inside a cell (an Ingress backend, say). */
+    onOpenRef?: (ref: ResourceRef) => void;
 }
 
 export function DataGrid({
@@ -117,6 +191,7 @@ export function DataGrid({
     renderCell,
     hiddenColumns,
     empty,
+    onOpenRef,
 }: DataGridProps) {
     const [sort, setSort] = useState<{ col: number; dir: SortDir } | null>(null);
     const [cursor, setCursor] = useState(0);
@@ -161,19 +236,49 @@ export function DataGrid({
         return () => ro.disconnect();
     }, []);
 
-    const first = Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN);
-    const count = Math.ceil(height / ROW_H) + OVERSCAN * 2;
-    const slice = sorted.slice(first, first + count);
+    /*
+     * Row offsets. Most tables are uniform 27px rows and this is a plain
+     * multiplication, but an Ingress with four routes needs four lines, so the
+     * window is computed from a prefix sum rather than from one constant. The
+     * sum is only rebuilt when the rows change.
+     */
+    const offsets = useMemo(() => {
+        const out = new Float64Array(sorted.length + 1);
+        for (let i = 0; i < sorted.length; i++) {
+            out[i + 1] = out[i]! + ROW_H * Math.max(1, sorted[i]!.lines ?? 1);
+        }
+        return out;
+    }, [sorted]);
+    const totalHeight = offsets[sorted.length] ?? 0;
+
+    const indexAt = useCallback(
+        (y: number) => {
+            let lo = 0;
+            let hi = sorted.length;
+            while (lo < hi) {
+                const mid = (lo + hi) >> 1;
+                if ((offsets[mid + 1] ?? 0) <= y) lo = mid + 1;
+                else hi = mid;
+            }
+            return Math.min(lo, Math.max(0, sorted.length - 1));
+        },
+        [offsets, sorted.length],
+    );
+
+    const first = Math.max(0, indexAt(scrollTop) - OVERSCAN);
+    const last = Math.min(sorted.length, indexAt(scrollTop + height) + OVERSCAN + 1);
+    const slice = sorted.slice(first, last);
 
     const scrollCursorIntoView = useCallback(
         (index: number) => {
             const el = scroller.current;
             if (!el) return;
-            const top = index * ROW_H;
+            const top = offsets[index] ?? 0;
+            const bottom = offsets[index + 1] ?? top + ROW_H;
             if (top < el.scrollTop) el.scrollTop = top;
-            else if (top + ROW_H > el.scrollTop + el.clientHeight) el.scrollTop = top + ROW_H - el.clientHeight;
+            else if (bottom > el.scrollTop + el.clientHeight) el.scrollTop = bottom - el.clientHeight;
         },
-        [],
+        [offsets],
     );
 
     const move = useCallback(
@@ -287,17 +392,26 @@ export function DataGrid({
                 {sorted.length === 0 ? (
                     <div className="grid-empty">{empty ?? "Nothing here."}</div>
                 ) : (
-                    <div style={{ height: sorted.length * ROW_H, position: "relative" }}>
-                        <div style={{ position: "absolute", top: first * ROW_H, left: 0, right: 0 }}>
+                    <div style={{ height: totalHeight, position: "relative" }}>
+                        <div style={{ position: "absolute", top: 0, left: 0, right: 0 }}>
                             {slice.map((row, i) => {
                                 const index = first + i;
                                 const key = rowKey(row);
                                 const isSel = selected.has(key);
+                                const top = offsets[index] ?? 0;
+                                const rowHeight = (offsets[index + 1] ?? top + ROW_H) - top;
                                 return (
                                     <div
                                         key={key}
                                         className={`grid-row ${isSel ? "selected" : ""} ${index === cursor ? "cursor" : ""}`}
-                                        style={{ gridTemplateColumns: template, height: ROW_H }}
+                                        style={{
+                                            gridTemplateColumns: template,
+                                            height: rowHeight,
+                                            position: "absolute",
+                                            top,
+                                            left: 0,
+                                            right: 0,
+                                        }}
                                         onClick={(e) => {
                                             setCursor(index);
                                             if (e.metaKey || e.ctrlKey || e.shiftKey) toggleSelect(key, index, e);
@@ -325,15 +439,28 @@ export function DataGrid({
                                             const tone: Tone | undefined =
                                                 (row.tones[c.index] as Tone | undefined) ??
                                                 (readyTone(value) ?? undefined);
+                                            const meter = row.meters?.[c.index];
+                                            const custom = renderCell?.(row, c.index, value);
                                             return (
                                                 <div
                                                     key={c.label}
                                                     className={`grid-cell mono ${tone && tone !== "neutral" ? `t-${tone}` : ""} ${
                                                         c.label === "NAME" ? "name" : ""
-                                                    }`}
-                                                    title={value}
+                                                    } ${row.lines && row.lines > 1 ? "tall" : ""}`}
+                                                    title={meter || row.rules ? undefined : value}
                                                 >
-                                                    {renderCell ? renderCell(row, c.index, value) : <span className="truncate">{value}</span>}
+                                                    {custom ?? (
+                                                        c.label === "RULES" && row.rules ? (
+                                                            <RouteCell routes={row.rules} ns={row.ns} onOpenRef={onOpenRef} />
+                                                        ) : meter ? (
+                                                            <>
+                                                                <span className="metric-value">{value}</span>
+                                                                <CellMeter pct={meter.pct} mark={meter.mark} />
+                                                            </>
+                                                        ) : (
+                                                            <span className="truncate">{value}</span>
+                                                        )
+                                                    )}
                                                 </div>
                                             );
                                         })}

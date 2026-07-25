@@ -7,6 +7,7 @@
 import type { K8sObject, PodMetrics } from "./kubectl.ts";
 import {
     age,
+    ingressRuleRows,
     jobStatus,
     nodeRoles,
     pvcAccessModes,
@@ -286,32 +287,6 @@ function genericSummary(obj: K8sObject): [string, string][] {
 
 export const POD_SECTION_COLUMNS = ["NAME", "READY", "STATUS", "RESTARTS", "CPU", "MEM", "NODE", "AGE"];
 
-/** Flatten an ingress's rules into [HOST, PATH, SERVICE, PORT] rows. */
-export function ingressRuleRows(obj: K8sObject): string[][] {
-    const rules =
-        (obj.spec as {
-            rules?: {
-                host?: string;
-                http?: { paths?: { path?: string; backend?: { service?: { name?: string; port?: { number?: number; name?: string } } } }[] };
-            }[];
-        })?.rules ?? [];
-    const rows: string[][] = [];
-    for (const rule of rules) {
-        const host = rule.host ?? "*";
-        const paths = rule.http?.paths ?? [];
-        if (paths.length === 0) {
-            rows.push([host, "/", "—", "—"]);
-            continue;
-        }
-        for (const p of paths) {
-            const svc = p.backend?.service;
-            const port = svc?.port?.number ?? svc?.port?.name ?? "";
-            rows.push([host, p.path ?? "/", svc?.name ?? "—", String(port)]);
-        }
-    }
-    return rows;
-}
-
 /** Does this pod mount the named PVC? */
 export function podMountsPVC(pod: K8sObject, pvc: string): boolean {
     const volumes = (pod.spec as { volumes?: { persistentVolumeClaim?: { claimName?: string } }[] })?.volumes ?? [];
@@ -324,4 +299,4 @@ export function jobOwnedByCronJob(job: K8sObject, name: string): boolean {
     return owners.some((o) => o.kind === "CronJob" && o.name === name);
 }
 
-export { jobStatus };
+export { ingressRuleRows, jobStatus };

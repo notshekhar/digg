@@ -85,14 +85,24 @@ export function Console() {
         return () => root.style.setProperty("--console-h", "0px");
     }, [dock.open, dock.height, expanded]);
 
-    if (!dock.open) return null;
+    /*
+     * Hiding the console must not kill what is running inside it.
+     *
+     * Unmounting a TerminalPane closes its WebSocket, and the server kills the
+     * pty when that socket goes — so a `return null` here would mean every
+     * shell dies the moment you collapse the panel. It stays mounted and goes
+     * away with CSS instead; the panes re-fit through their ResizeObserver when
+     * it comes back.
+     */
+    const hidden = !dock.open;
 
     const activeForwards = forwards.filter((f) => f.status !== "stopped");
     const tab = dock.tab === "new-local" ? "forwards" : dock.tab || "forwards";
 
     return createPortal(
         <section
-            className={`console ${expanded ? "expanded" : ""}`}
+            className={`console ${expanded ? "expanded" : ""} ${hidden ? "hidden" : ""}`}
+            aria-hidden={hidden}
             style={expanded ? undefined : { height: dock.height }}
             aria-label="Console"
         >
