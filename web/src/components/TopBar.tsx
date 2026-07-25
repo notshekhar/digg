@@ -54,11 +54,6 @@ export function TopBar({ onPalette }: { onPalette: () => void }) {
     const toggleTheme = () => {
         const next = theme === "dark" ? "light" : "dark";
         document.documentElement.dataset.theme = next;
-        try {
-            localStorage.setItem("digg.theme", next);
-        } catch {
-            /* private mode */
-        }
         setState({ theme: next });
         void api.prefs({ theme: next }).catch(() => {});
     };

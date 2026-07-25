@@ -25,6 +25,7 @@ import { Icon } from "./icons.tsx";
 import { Menu } from "./ui.tsx";
 import type { MenuItem } from "./ui.tsx";
 import type { ResourceRef, Row, Tone } from "../lib/types.ts";
+import { readUiState, useUiState } from "../lib/ui-state.ts";
 import { readyTone } from "../lib/format.ts";
 import "./DataGrid.css";
 
@@ -166,6 +167,8 @@ function columnWidth(label: string, index: number): string {
 export interface DataGridProps {
     columns: string[];
     rows: Row[];
+    /** Identifies the table so its sort outlives the visit (lib/ui-state.ts). */
+    stateKey?: string;
     /** Column index whose values carry status colour, from the server. */
     onOpen: (row: Row) => void;
     selected: Set<string>;
@@ -184,6 +187,7 @@ export interface DataGridProps {
 export function DataGrid({
     columns,
     rows,
+    stateKey,
     onOpen,
     selected,
     onSelectedChange,
@@ -193,7 +197,40 @@ export function DataGrid({
     empty,
     onOpenRef,
 }: DataGridProps) {
-    const [sort, setSort] = useState<{ col: number; dir: SortDir } | null>(null);
+    // Sorting is how someone reads a kind — by restarts for pods, by age for
+    // events — and re-picking it on every visit is the sort of small tax that
+    // makes a tool feel borrowed. Keyed on the column LABEL, not its index:
+    // kubectl's column order is not a promise.
+    const [savedSort, setSavedSort] = useUiState<Record<string, { col: string; dir: SortDir }>>("grid.sort", {});
+    const saved = stateKey ? savedSort[stateKey] : undefined;
+    const [sort, setSortState] = useState<{ col: number; dir: SortDir } | null>(() => {
+        const col = saved ? columns.indexOf(saved.col) : -1;
+        return col >= 0 ? { col, dir: saved!.dir } : null;
+    });
+    const setSort = useCallback(
+        (next: { col: number; dir: SortDir } | null) => {
+            setSortState(next);
+            if (!stateKey) return;
+            setSavedSort((prev) => {
+                const copy = { ...prev };
+                if (next && columns[next.col]) copy[stateKey] = { col: columns[next.col]!, dir: next.dir };
+                else delete copy[stateKey];
+                return copy;
+            });
+        },
+        [stateKey, columns, setSavedSort],
+    );
+    // ListPage swaps columns and rows in place when you change kind, so the
+    // grid never remounts — the sort has to be re-read for the new table.
+    useEffect(() => {
+        const all = readUiState<Record<string, { col: string; dir: SortDir }>>("grid.sort", {});
+        const want = stateKey ? all[stateKey] : undefined;
+        const col = want ? columns.indexOf(want.col) : -1;
+        setSortState(col >= 0 ? { col, dir: want!.dir } : null);
+        // Only on table identity: `columns` is a fresh array on every poll.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [stateKey]);
+
     const [cursor, setCursor] = useState(0);
     const [scrollTop, setScrollTop] = useState(0);
     const [height, setHeight] = useState(600);
@@ -368,9 +405,9 @@ export function DataGrid({
                         type="button"
                         className={`grid-cell head ${sort?.col === c.index ? "sorted" : ""}`}
                         onClick={() =>
-                            setSort((s) =>
-                                s?.col === c.index
-                                    ? s.dir === "asc"
+                            setSort(
+                                sort?.col === c.index
+                                    ? sort.dir === "asc"
                                         ? { col: c.index, dir: "desc" }
                                         : null
                                     : { col: c.index, dir: "asc" },

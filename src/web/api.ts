@@ -60,6 +60,7 @@ import {
     getWebPrefs,
     setContextPrefs,
     setLastContext,
+    setUiState,
     setWebPrefs,
 } from "../settings.ts";
 import { getVersion } from "../commands.ts";
@@ -199,6 +200,16 @@ export async function handleApi(req: Request): Promise<Response | null> {
                 if (Object.keys(patch).length) setContextPrefs(context, patch);
             }
             return json({ ok: true, prefs: getWebPrefs() });
+        }
+
+        // The shape of the UI — folded rail groups, console height, log
+        // toggles, table sort. Sent as a patch, and by `sendBeacon` when the
+        // tab goes away, which is why a plain POST body (no JSON header) has
+        // to be accepted too.
+        if (pathname === "/api/ui" && req.method === "POST") {
+            const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+            if (!body || typeof body !== "object" || Array.isArray(body)) return bad("invalid json");
+            return json({ ok: true, ui: setUiState(body) });
         }
 
         if (pathname === "/api/namespaces" && req.method === "GET") {

@@ -150,6 +150,7 @@ export function ListPage({ kind, onOpen }: { kind: string; onOpen: (ref: Resourc
                 <DataGrid
                     columns={data.columns}
                     rows={rows}
+                    stateKey={kind}
                     hiddenColumns={hidden}
                     selected={selected}
                     onSelectedChange={setSelected}

@@ -21,11 +21,24 @@ import type {
 
 declare global {
     interface Window {
-        __DIGG__?: { theme: "light" | "dark"; version: string; token: string; context?: string };
+        __DIGG__?: {
+            theme: "light" | "dark";
+            version: string;
+            token: string;
+            context?: string;
+            /** Saved UI state; see lib/ui-state.ts. */
+            ui?: Record<string, unknown>;
+        };
     }
 }
 
-export const boot0 = window.__DIGG__ ?? { theme: "dark" as const, version: "dev", token: "", context: undefined };
+export const boot0 = window.__DIGG__ ?? {
+    theme: "dark" as const,
+    version: "dev",
+    token: "",
+    context: undefined,
+    ui: undefined,
+};
 
 /** Dev server (bun run dev) has no injected token; the proxy target has one. */
 const TOKEN = boot0.token;

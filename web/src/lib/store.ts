@@ -10,6 +10,7 @@
 import { useSyncExternalStore } from "react";
 import type { CatalogGroup, Forward, KindMeta } from "./types.ts";
 import { live } from "./live.ts";
+import { readUiState, writeUiState } from "./ui-state.ts";
 
 export interface TerminalSession {
     id: string;
@@ -75,7 +76,9 @@ const initial: AppState = {
     refreshSeconds: 5,
     forwards: [],
     terminals: [],
-    dock: { open: false, tab: "", height: 320 },
+    // Open-ness follows what is running; the height someone dragged to is
+    // theirs and outlives the tab.
+    dock: { open: false, tab: "", height: readUiState("console.height", 320) },
     toasts: [],
     refreshTick: 0,
     refreshing: false,
@@ -169,5 +172,6 @@ export function closeTerminal(id: string): void {
 }
 
 export function setDock(patch: Partial<AppState["dock"]>): void {
+    if (patch.height !== undefined) writeUiState("console.height", patch.height);
     setState((s) => ({ dock: { ...s.dock, ...patch } }));
 }

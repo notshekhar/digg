@@ -1,5 +1,33 @@
 # Changelog
 
+## v1.2.0
+
+- **Fixed: the log pane dragged you back to the newest line.** Scrolling up in a
+  busy pod's logs held for a moment and then crept forward again, with follow on
+  or off. The scrollbar was innocent: once the buffer hit its 5,000-line cap
+  every batch of new lines dropped the same number off the FRONT, so the
+  surviving lines slid up under a scroll position that never moved, and the
+  reader was fed the tail one frame at a time. (Rows are keyed by index, so
+  React rewrote them in place and the browser's scroll anchoring never saw a
+  thing.) The head is now only trimmed while pinned to the bottom, where it is
+  invisible. Paused, the buffer grows to 20,000 lines and then declines new ones
+  rather than moving anything the reader is looking at — the jump-to-live button
+  says how many it skipped.
+- **Follow now turns off when you say so, not when the scrollbar agrees.**
+  Scroll events arrive asynchronously, so a wheel-up on a fast stream could land
+  after follow had already snapped the pane back to the bottom, be measured as
+  "still at the bottom", and be ignored. Wheel and touch turn follow off
+  directly, and the pane's own scrolls are marked so they cannot be mistaken for
+  user intent. Scrolling back to the bottom re-attaches.
+- **The UI remembers its shape, in `~/.digg/settings.json`.** Folded rail
+  groups, the console's height, log toggles (wrap, timestamps, tail length) and
+  each table's sort column now persist with the theme and the last namespace,
+  instead of living in the tab. localStorage was the wrong home for them: it is
+  keyed on the origin, and `digg serve` walks up a port when one is busy, so the
+  cockpit forgot its layout whenever it landed on 9911 instead of 9910. State is
+  stamped into the page at render — no boot fetch, no second paint — and written
+  back debounced, with a `sendBeacon` flush when the tab goes away.
+
 ## v1.1.1
 
 - **Fixed: opening the console squashed the page behind it.** Panels in a

@@ -6,8 +6,10 @@
  *
  *   - the theme, on <html data-theme>, because a boot fetch paints the wrong
  *     colours first and then flips them;
- *   - a small boot object, so the shell can name the version and the last
- *     context before its first round trip.
+ *   - a small boot object, so the shell can name the version, the last context
+ *     and the saved UI state before its first round trip. The UI state is
+ *     stamped for the same reason as the theme: fetching it would render the
+ *     default layout first and rearrange it a moment later.
  */
 
 import { INDEX_HTML } from "./bundle.ts";
@@ -19,6 +21,8 @@ export interface PageBoot {
     token: string;
     context?: string;
     namespace?: string | null;
+    /** Saved UI state (settings.ts), so the shell opens at its last shape. */
+    ui?: Record<string, unknown>;
 }
 
 export function pageHtml(boot: PageBoot): string {

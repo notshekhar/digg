@@ -1,7 +1,7 @@
 /**
  * The navigation rail: every kind in the cluster, grouped.
  *
- * Groups collapse and the state persists, because the useful shape of this list
+ * Groups collapse and the state persists (in ~/.digg, see lib/ui-state.ts), because the useful shape of this list
  * is personal — someone living in Workloads wants Config and Access Control
  * folded away, and re-folding them on every page load is the fastest way to
  * make a sidebar annoying. The filter box searches kind titles, resource names
@@ -12,6 +12,7 @@ import { useMemo, useState } from "react";
 import { Icon } from "./icons.tsx";
 import { navigate, type Route } from "../lib/router.ts";
 import { useApp } from "../lib/store.ts";
+import { useUiState } from "../lib/ui-state.ts";
 import type { CatalogGroup } from "../lib/types.ts";
 import "./Rail.css";
 
@@ -31,21 +32,14 @@ function groupIcon(id: string) {
     return GROUP_ICON[id] ?? Icon.Layers;
 }
 
-const COLLAPSE_KEY = "digg.rail.collapsed";
-
-function loadCollapsed(): Set<string> {
-    try {
-        const raw = localStorage.getItem(COLLAPSE_KEY);
-        return new Set(raw ? (JSON.parse(raw) as string[]) : ["config", "access", "definitions", "other"]);
-    } catch {
-        return new Set();
-    }
-}
+const COLLAPSE_KEY = "rail.collapsed";
+const COLLAPSED_BY_DEFAULT = ["config", "access", "definitions", "other"];
 
 export function Rail({ route }: { route: Route }) {
     const catalog = useApp((s) => s.catalog);
     const version = useApp((s) => s.version);
-    const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed);
+    const [folded, setFolded] = useUiState<string[]>(COLLAPSE_KEY, COLLAPSED_BY_DEFAULT);
+    const collapsed = useMemo(() => new Set(folded), [folded]);
     const [q, setQ] = useState("");
 
     const filtered: CatalogGroup[] = useMemo(() => {
@@ -65,17 +59,7 @@ export function Rail({ route }: { route: Route }) {
     }, [catalog, q]);
 
     const toggle = (id: string) => {
-        setCollapsed((prev) => {
-            const next = new Set(prev);
-            if (next.has(id)) next.delete(id);
-            else next.add(id);
-            try {
-                localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...next]));
-            } catch {
-                /* private mode */
-            }
-            return next;
-        });
+        setFolded((prev) => (prev.includes(id) ? prev.filter((g) => g !== id) : [...prev, id]));
     };
 
     const activeKind = route.page === "list" ? route.kind : "";

@@ -22,7 +22,7 @@ import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { getVersion } from "./commands.ts";
 import { isKubectlAvailable } from "./kubectl.ts";
-import { getLastContext, getWebPrefs } from "./settings.ts";
+import { getLastContext, getUiState, getWebPrefs } from "./settings.ts";
 import { handleApi } from "./web/api.ts";
 import { pageHtml } from "./web/page.ts";
 import { type ExecSocketData, parseExecTarget, startExecSession } from "./web/exec.ts";
@@ -131,6 +131,7 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
                         version: getVersion(),
                         token: TOKEN,
                         context: getLastContext(),
+                        ui: getUiState(),
                     }),
                     {
                         headers: {
