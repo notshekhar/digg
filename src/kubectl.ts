@@ -1,6 +1,34 @@
 // Thin wrapper around the kubectl CLI. We shell out rather than talking to the
 // API directly so every auth method (client certs, tokens, and exec plugins
 // like aws/gcp/oidc) works for free — kubectl already handles all of it.
+//
+// READS take a shortcut. Spawning a process per request re-does the kubeconfig
+// parse, the exec credential plugin and the TLS handshake every single time, so
+// each read here first tries `src/proxy.ts` — one long-lived `kubectl proxy` on
+// a unix socket, i.e. the same kubectl doing the same authenticating, once. If
+// there is no proxy the original kubectl call runs, unchanged; that fallback is
+// why every one of these functions still ends in the argv it always had.
+//
+// WRITES never take it. Every mutation is its own kubectl (the proxy socket is
+// started with --reject-methods), so `kubectl apply` stays the thing that
+// applies, with its own dry-run, field-manager and error messages.
+
+import { withQuery, resourcePath, type ResourceCoords } from "./apipath.ts";
+import { findResource } from "./discovery.ts";
+import { proxyGet } from "./proxy.ts";
+import { parseQuantity } from "./quantity.ts";
+
+/** Metrics live in an aggregated API that discovery hides behind core "pods". */
+const METRICS_PODS: ResourceCoords = { name: "pods", apiVersion: "metrics.k8s.io/v1beta1", namespaced: true };
+const METRICS_NODES: ResourceCoords = { name: "nodes", apiVersion: "metrics.k8s.io/v1beta1", namespaced: false };
+/** Core events, named explicitly: events.k8s.io/v1 calls the field `regarding`. */
+const CORE_EVENTS: ResourceCoords = { name: "events", apiVersion: "v1", namespaced: true };
+const CORE_NODES: ResourceCoords = { name: "nodes", apiVersion: "v1", namespaced: false };
+
+interface K8sList<T> {
+    items?: T[];
+    metadata?: { resourceVersion?: string };
+}
 
 export interface K8sObject {
     apiVersion?: string;
@@ -79,6 +107,18 @@ export interface ListOptions {
 }
 
 export async function listResources(kind: string, opts: ListOptions): Promise<K8sObject[]> {
+    const res = await findResource(opts.context, kind).catch(() => undefined);
+    if (res) {
+        const path = withQuery(
+            resourcePath(
+                { name: res.name, apiVersion: res.apiVersion, namespaced: res.namespaced && !opts.clusterScoped },
+                { namespace: opts.namespace },
+            ),
+            { labelSelector: opts.labelSelector, fieldSelector: opts.fieldSelector },
+        );
+        const body = await proxyGet<K8sList<K8sObject>>(opts.context, path);
+        if (body) return body.items ?? [];
+    }
     const args = ["get", kind, "-o", "json"];
     if (!opts.clusterScoped) {
         if (opts.namespace) {
@@ -103,6 +143,51 @@ export interface PodMetrics {
     memory: string;
 }
 
+interface RawPodMetrics {
+    metadata?: { name?: string; namespace?: string };
+    containers?: { name?: string; usage?: { cpu?: string; memory?: string } }[];
+}
+
+/**
+ * PodMetrics straight from metrics.k8s.io, or null when there is no proxy or
+ * no metrics-server. The quantities are raw ("5215074n", "12660Ki") where
+ * `kubectl top` rounds to "5m"/"12Mi" — every consumer runs them through
+ * parseQuantity, which reads both, and the unrounded numbers are strictly
+ * better input for a gauge.
+ */
+async function metricsPods(
+    context: string,
+    namespace: string | undefined,
+    labelSelector?: string,
+    pod?: string,
+): Promise<RawPodMetrics[] | null> {
+    const path = pod
+        ? resourcePath(METRICS_PODS, { namespace, objectName: pod })
+        : withQuery(resourcePath(METRICS_PODS, { namespace }), { labelSelector });
+    try {
+        const body = await proxyGet<K8sList<RawPodMetrics> & RawPodMetrics>(context, path);
+        if (!body) return null;
+        // A single pod answers with the object itself, not a list.
+        return pod ? [body] : (body.items ?? []);
+    } catch {
+        // No metrics-server is an ordinary state, not an error: the gauges
+        // already know how to draw "unknown".
+        return null;
+    }
+}
+
+/** A pod's usage is the sum of its containers'; the API only reports the parts. */
+function sumContainers(pm: RawPodMetrics): PodMetrics {
+    let cpu = 0;
+    let mem = 0;
+    for (const c of pm.containers ?? []) {
+        cpu += parseQuantity(c.usage?.cpu);
+        mem += parseQuantity(c.usage?.memory);
+    }
+    // Back to strings in the units the callers already parse: cores and bytes.
+    return { cpu: `${cpu}`, memory: `${mem}` };
+}
+
 /**
  * Per-pod CPU/memory via `kubectl top`. Returns an empty map when metrics
  * aren't available (no metrics-server) rather than throwing.
@@ -112,6 +197,19 @@ export async function topPods(
     namespace: string | undefined,
     labelSelector?: string,
 ): Promise<Map<string, PodMetrics>> {
+    const viaApi = await metricsPods(context, namespace, labelSelector);
+    if (viaApi) {
+        const map = new Map<string, PodMetrics>();
+        for (const pm of viaApi) {
+            const totals = sumContainers(pm);
+            const ns = pm.metadata?.namespace ?? namespace ?? "";
+            const name = pm.metadata?.name ?? "";
+            if (!name) continue;
+            if (ns) map.set(`${ns}/${name}`, totals);
+            map.set(name, totals);
+        }
+        return map;
+    }
     const args = ["top", "pods", "--no-headers"];
     if (namespace) {
         args.push("-n", namespace);
@@ -156,6 +254,21 @@ export async function topPodContainers(
     context: string,
     opts: { namespace?: string; labelSelector?: string; pod?: string } = {},
 ): Promise<Map<string, PodMetrics>> {
+    const viaApi = await metricsPods(context, opts.namespace, opts.labelSelector, opts.pod);
+    if (viaApi) {
+        const map = new Map<string, PodMetrics>();
+        for (const pm of viaApi) {
+            const ns = pm.metadata?.namespace ?? opts.namespace ?? "";
+            const pod = pm.metadata?.name ?? "";
+            for (const c of pm.containers ?? []) {
+                if (!c.name) continue;
+                const metrics = { cpu: c.usage?.cpu ?? "0", memory: c.usage?.memory ?? "0" };
+                if (ns) map.set(`${ns}/${pod}/${c.name}`, metrics);
+                map.set(`${pod}/${c.name}`, metrics);
+            }
+        }
+        return map;
+    }
     const args = ["top", "pods"];
     if (opts.pod) args.push(opts.pod);
     args.push("--containers", "--no-headers");
@@ -187,6 +300,53 @@ export async function topPodContainers(
     return map;
 }
 
+/**
+ * `kubectl top nodes` is two API reads and a division: usage from
+ * metrics.k8s.io, the denominator from each node's **allocatable** (what the
+ * scheduler can hand out), which is what kubectl divides by too.
+ */
+async function nodeMetricsFromApi(context: string): Promise<Map<string, NodeMetrics> | null> {
+    interface NodeMetricsItem {
+        metadata?: { name?: string };
+        usage?: { cpu?: string; memory?: string };
+    }
+    interface NodeItem {
+        metadata?: { name?: string };
+        status?: { allocatable?: { cpu?: string; memory?: string } };
+    }
+    let usage: K8sList<NodeMetricsItem> | null;
+    try {
+        usage = await proxyGet<K8sList<NodeMetricsItem>>(context, resourcePath(METRICS_NODES, {}));
+    } catch {
+        return null; // no metrics-server; the kubectl path reports it the same way
+    }
+    if (!usage) return null;
+    const nodes = await proxyGet<K8sList<NodeItem>>(context, resourcePath(CORE_NODES, {})).catch(() => null);
+    const allocatable = new Map<string, { cpu: number; memory: number }>();
+    for (const n of nodes?.items ?? []) {
+        if (!n.metadata?.name) continue;
+        allocatable.set(n.metadata.name, {
+            cpu: parseQuantity(n.status?.allocatable?.cpu),
+            memory: parseQuantity(n.status?.allocatable?.memory),
+        });
+    }
+    const map = new Map<string, NodeMetrics>();
+    for (const item of usage.items ?? []) {
+        const name = item.metadata?.name;
+        if (!name) continue;
+        const cap = allocatable.get(name);
+        const cpu = parseQuantity(item.usage?.cpu);
+        const memory = parseQuantity(item.usage?.memory);
+        map.set(name, {
+            cpu: `${cpu}`,
+            cpuPercent: cap?.cpu ? Math.round((cpu / cap.cpu) * 100) : null,
+            memory: `${memory}`,
+            memoryPercent: cap?.memory ? Math.round((memory / cap.memory) * 100) : null,
+        });
+    }
+    return map;
+}
+
 export interface ResourceRef {
     kind: string;
     name: string;
@@ -204,6 +364,12 @@ export async function getYaml(ref: ResourceRef): Promise<string> {
 
 /** Live object as JSON — the source we transform for the secret/config editor. */
 export async function getJson(ref: ResourceRef): Promise<K8sObject> {
+    const res = await findResource(ref.context, ref.kind).catch(() => undefined);
+    if (res) {
+        const path = resourcePath(res, { namespace: ref.namespace, objectName: ref.name });
+        const body = await proxyGet<K8sObject>(ref.context, path);
+        if (body) return body;
+    }
     const args = ["get", ref.kind, ref.name, "-o", "json"];
     if (ref.namespace) {
         args.push("-n", ref.namespace);
@@ -279,6 +445,11 @@ export interface K8sEvent {
  */
 export async function getEvents(ref: ResourceRef, involvedKind: string): Promise<K8sEvent[]> {
     const selector = [`involvedObject.kind=${involvedKind}`, `involvedObject.name=${ref.name}`];
+    const viaApi = await proxyGet<K8sList<RawEvent>>(
+        ref.context,
+        withQuery(resourcePath(CORE_EVENTS, { namespace: ref.namespace }), { fieldSelector: selector.join(",") }),
+    ).catch(() => null);
+    if (viaApi) return sortEvents((viaApi.items ?? []).map(normalizeEvent));
     const args = ["get", "events", "-o", "json", "--field-selector", selector.join(",")];
     if (ref.namespace) {
         args.push("-n", ref.namespace);
@@ -291,9 +462,12 @@ export async function getEvents(ref: ResourceRef, involvedKind: string): Promise
     }
     const parsed = JSON.parse(result.stdout) as { items?: RawEvent[] };
     const items = parsed.items ?? [];
-    const events = items.map(normalizeEvent);
-    events.sort((a, b) => new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime());
-    return events;
+    return sortEvents(items.map(normalizeEvent));
+}
+
+/** Newest first — the only order an event list is ever read in. */
+function sortEvents<T extends { lastSeen: string }>(events: T[]): T[] {
+    return events.sort((a, b) => new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime());
 }
 
 interface RawEvent {
@@ -448,6 +622,8 @@ export interface NodeMetrics {
  * column, never a precondition for browsing.
  */
 export async function topNodes(context: string): Promise<Map<string, NodeMetrics>> {
+    const viaApi = await nodeMetricsFromApi(context);
+    if (viaApi) return viaApi;
     const result = await run(["top", "nodes", "--no-headers"], context);
     const map = new Map<string, NodeMetrics>();
     if (result.code !== 0) return map;
@@ -477,6 +653,15 @@ export async function listEvents(
     namespace: string | undefined,
     limit = 500,
 ): Promise<(K8sEvent & { object: string; namespace: string })[]> {
+    type EventItem = RawEvent & {
+        metadata?: { namespace?: string };
+        involvedObject?: { kind?: string; name?: string };
+    };
+    const viaApi = await proxyGet<K8sList<EventItem>>(
+        context,
+        resourcePath(CORE_EVENTS, { namespace }),
+    ).catch(() => null);
+    if (viaApi) return sortEvents((viaApi.items ?? []).map(eventRow)).slice(0, limit);
     const args = ["get", "events", "-o", "json"];
     if (namespace) {
         args.push("-n", namespace);
@@ -491,13 +676,15 @@ export async function listEvents(
             involvedObject?: { kind?: string; name?: string };
         })[];
     };
-    const rows = (parsed.items ?? []).map((e) => ({
+    return sortEvents((parsed.items ?? []).map(eventRow)).slice(0, limit);
+}
+
+function eventRow(e: RawEvent & { metadata?: { namespace?: string }; involvedObject?: { kind?: string; name?: string } }) {
+    return {
         ...normalizeEvent(e),
         object: `${e.involvedObject?.kind ?? ""}/${e.involvedObject?.name ?? ""}`,
         namespace: e.metadata?.namespace ?? "",
-    }));
-    rows.sort((a, b) => new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime());
-    return rows.slice(0, limit);
+    };
 }
 
 export interface ClusterVersion {

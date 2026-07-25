@@ -28,6 +28,7 @@ import { pageHtml } from "./web/page.ts";
 import { type ExecSocketData, parseExecTarget, startExecSession } from "./web/exec.ts";
 import { LiveSession, installShutdownHook, registry } from "./web/live.ts";
 import { stopAllForwards } from "./web/forwards.ts";
+import { stopAllProxies } from "./proxy.ts";
 
 /**
  * Both socket flavours share one Bun websocket handler, so every message has to
@@ -223,6 +224,9 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
     const shutdown = () => {
         stopAllForwards();
         registry.shutdown();
+        // The proxies are kubectl children holding unix sockets; a socket file
+        // left behind is one the next run has to unlink before it can bind.
+        stopAllProxies();
         process.exit(0);
     };
     process.on("SIGINT", shutdown);

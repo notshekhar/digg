@@ -37,12 +37,42 @@ export interface DiscoveredResource {
  * We locate columns by the header's start offsets so values with internal
  * spaces (VERBS like "[get list ...]") don't shift parsing.
  */
-export async function apiResources(context: string): Promise<DiscoveredResource[]> {
+const cache = new Map<string, { at: number; value: DiscoveredResource[] }>();
+/**
+ * Discovery answers nearly every request (a list needs it, a detail page needs
+ * it, an events query needs it) and it was a kubectl spawn each time. kubectl
+ * itself caches the answer on disk for ten minutes (`--cached`); holding it in
+ * memory for five is the same bargain without the process.
+ */
+const TTL_MS = 5 * 60_000;
+
+export async function apiResources(context: string, opts: { refresh?: boolean } = {}): Promise<DiscoveredResource[]> {
+    const hit = cache.get(context);
+    if (!opts.refresh && hit && Date.now() - hit.at < TTL_MS) return hit.value;
     const result = await run(["api-resources", "-o", "wide", "--cached", "--verbs=get"], context);
     if (result.code !== 0) {
-        return [];
+        // Don't cache a failure: the cluster may just have been unreachable.
+        return hit?.value ?? [];
     }
-    return parseApiResources(result.stdout);
+    const value = parseApiResources(result.stdout);
+    cache.set(context, { at: Date.now(), value });
+    return value;
+}
+
+/** Coordinates for a plural resource name, for building its REST path. */
+export async function findResource(context: string, kind: string): Promise<DiscoveredResource | undefined> {
+    const all = await apiResources(context);
+    const lower = kind.toLowerCase();
+    return (
+        all.find((r) => r.name === kind) ??
+        all.find((r) => r.shortNames.includes(kind)) ??
+        all.find((r) => r.kind.toLowerCase() === lower) ??
+        all.find((r) => r.name === `${lower}s`)
+    );
+}
+
+export function clearDiscoveryCache(): void {
+    cache.clear();
 }
 
 /** Pure parser for `kubectl api-resources -o wide` output. Exported for tests. */

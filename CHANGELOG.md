@@ -1,5 +1,48 @@
 # Changelog
 
+## v1.3.0
+
+**digg stops paying for a process per question.** Every read used to be its own
+`kubectl`, and a process re-does the whole handshake before it asks anything:
+parse the kubeconfig, run the exec credential plugin, negotiate TLS. Now there
+is one long-lived `kubectl proxy` per context and reads are plain HTTP into it.
+
+- **One proxy, on a unix socket.** Measured against a local minikube: `kubectl
+  get pods -A -o json` costs ~50ms per call, the same request over the proxy
+  ~3ms. digg's own endpoints, end to end: a pod list 112ms → 13ms, a pod detail
+  page 107ms → 11ms. On a cloud cluster the gap is wider, because the exec
+  credential plugin is the expensive part — proven, not assumed: five `kubectl
+  get` calls run `aws eks get-token` five times, five requests through one proxy
+  run it once, and a detail page makes half a dozen calls.
+- **Why a socket and not a port.** v1.1.0 rejected an embedded `kubectl proxy`
+  because a TCP proxy on localhost is an unauthenticated cluster-admin port and
+  any page in any browser can reach 127.0.0.1. A unix socket has no port to
+  reach: kubectl creates it `srwx------` in `~/.digg`, so only a process running
+  as you can open it, and it is started with `--reject-methods` so nothing can
+  write through it even then.
+- **kubectl still does the authenticating**, so client certs, tokens and every
+  exec plugin (aws/gcp/oidc) work exactly as before. **Every write is still its
+  own kubectl** — apply, patch, scale, delete, drain, exec, port-forward — as
+  are `describe` and YAML, whose output is kubectl's own. If the proxy cannot
+  start, every read falls back to the argv it always used; `DIGG_NO_PROXY=1`
+  forces that path.
+- **Watches resume instead of re-listing.** The API server closes a watch every
+  few minutes by design. The kubectl watch could only answer that by re-listing
+  every object in the kind, because kubectl accepts no resourceVersion; the API
+  watch reconnects from the last version it saw and is sent only what changed.
+  Bookmarks keep that version fresh, and a 410 — the one case where the version
+  has aged out — is the only thing that triggers a fresh list.
+- **The list now has an end.** `?resourceVersion=0` is a list with a version
+  attached, served from the API server's cache, so the initial snapshot is exact
+  and immediate. The kubectl path had to guess: buffer the opening burst and
+  call it done after 250ms of quiet. That guess is now only used on that path.
+- **Discovery is cached in memory** for five minutes. It answers nearly every
+  request — a list needs it, a detail page needs it — and it was a `kubectl
+  api-resources` spawn each time.
+- **Usage numbers come from metrics.k8s.io directly**, so they are no longer
+  rounded to whole millicores and mebibytes by `kubectl top` on the way in. Node
+  percentages are computed against allocatable, as kubectl computes them.
+
 ## v1.2.0
 
 - **Fixed: the log pane dragged you back to the newest line.** Scrolling up in a

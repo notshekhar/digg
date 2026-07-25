@@ -1,7 +1,8 @@
 /**
  * The live layer: watches on the server, deltas on the wire.
  *
- * Objects are pushed (a kubectl watch per kind), metrics are pulled on a timer.
+ * Objects are pushed (one watch per kind — over the proxy socket where that is
+ * available, kubectl otherwise; see watch-source.ts), metrics are pulled on a timer.
  * That split is not a compromise, it is the shape of Kubernetes: metrics.k8s.io
  * implements only get and list — `watch is not supported on resources of kind
  * pods.metrics.k8s.io` — and metrics-server samples on its own schedule
@@ -27,7 +28,8 @@
 import type { K8sObject } from "../kubectl.ts";
 import { type KindDef, findKind, genericKind } from "../format.ts";
 import { apiResources } from "../discovery.ts";
-import { ResourceWatch, objectKey } from "../watch.ts";
+import { objectKey } from "../watch.ts";
+import { type WatchLike, createWatch } from "../watch-source.ts";
 import { type UsageColumns, usageColumns } from "./gauges.ts";
 import { type Row, buildRow, columnsFor, rowFingerprint } from "./rows.ts";
 import { buildDetailPayload } from "./detail.ts";
@@ -52,7 +54,7 @@ type StoreEvent =
 class KindStore {
     readonly objects = new Map<string, K8sObject>();
     private readonly listeners = new Set<StoreListener>();
-    private readonly watch: ResourceWatch;
+    private readonly watch: WatchLike;
     private idle: ReturnType<typeof setTimeout> | null = null;
     private started = false;
     /** Replayed to whoever subscribes next, so a late tab is not left blank. */
@@ -66,7 +68,7 @@ class KindStore {
         namespace: string | undefined,
         private readonly onIdleClose: () => void,
     ) {
-        this.watch = new ResourceWatch(
+        this.watch = createWatch(
             { context, kind: kind.name, namespace, clusterScoped: kind.clusterScoped },
             {
                 onSnapshot: (objects) => {

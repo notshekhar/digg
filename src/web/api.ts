@@ -64,6 +64,7 @@ import {
     setWebPrefs,
 } from "../settings.ts";
 import { getVersion } from "../commands.ts";
+import { ApiError } from "../proxy.ts";
 
 const json = (data: unknown, status = 200) =>
     new Response(JSON.stringify(data), {
@@ -482,7 +483,7 @@ export async function handleApi(req: Request): Promise<Response | null> {
                 // server fault: surface the exact stderr with a 400.
                 return json(
                     { ok: false, message: err instanceof Error ? err.message : String(err) },
-                    err instanceof KubectlError ? 400 : 500,
+                    isClusterError(err) ? 400 : 500,
                 );
             }
         }
@@ -527,7 +528,15 @@ export async function handleApi(req: Request): Promise<Response | null> {
 
         return bad("not found", 404);
     } catch (err) {
-        const msg = err instanceof KubectlError ? err.message : err instanceof Error ? err.message : String(err);
-        return bad(msg, err instanceof KubectlError ? 502 : 500);
+        const msg = err instanceof Error ? err.message : String(err);
+        return bad(msg, isClusterError(err) ? 502 : 500);
     }
+}
+
+/**
+ * Something the cluster said no to, rather than something digg got wrong —
+ * whichever route the read took. Both carry a message worth showing as-is.
+ */
+function isClusterError(err: unknown): boolean {
+    return err instanceof KubectlError || err instanceof ApiError;
 }

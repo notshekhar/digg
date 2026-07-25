@@ -4,11 +4,13 @@
  *
  * `kubectl get <kind> --watch --output-watch-events -o json` does a list, then
  * streams `{"type":"ADDED"|"MODIFIED"|"DELETED","object":{…}}` for every change.
- * Shelling out keeps digg's one rule intact: kubectl owns authentication, so
- * client certs, tokens and every exec plugin (aws/gcp/oidc) work for free. The
- * alternative — an embedded `kubectl proxy` — would open an unauthenticated
- * cluster-admin port on localhost, which is the exact thing digg's per-run
- * token exists to prevent.
+ * This is the FALLBACK route. `src/api-watch.ts` watches the API directly
+ * through the proxy socket and should be preferred — see `watch-source.ts` —
+ * but it needs a proxy and a kind discovery knows about, and this needs
+ * neither. (The reason there was no proxy for so long: a TCP `kubectl proxy` on
+ * localhost is an unauthenticated cluster-admin port, the exact thing digg's
+ * per-run token exists to prevent. A unix socket has no port to reach, which is
+ * what made it answerable.)
  *
  * Two things the API server does NOT give us, and how this file answers them:
  *
