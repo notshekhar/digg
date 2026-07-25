@@ -69,6 +69,7 @@ export function Picker(props: SingleProps | MultiProps) {
     const [q, setQ] = useState("");
     const [cursor, setCursor] = useState(0);
     const listRef = useRef<HTMLDivElement>(null);
+    const inputRef = useRef<HTMLInputElement>(null);
 
     /**
      * Which rows float to the top — decided when the search changes, NOT when
@@ -113,48 +114,61 @@ export function Picker(props: SingleProps | MultiProps) {
         }
         if (row.all) {
             (props.onPick as (v: string[]) => void)([]);
+            inputRef.current?.focus();
             return;
         }
         const next = new Set(props.selected as string[]);
         if (next.has(row.value)) next.delete(row.value);
         else next.add(row.value);
         (props.onPick as (v: string[]) => void)([...next]);
+        inputRef.current?.focus();
     };
 
     const count = multiple ? (props.selected as string[]).length : 0;
 
+    /**
+     * On the dialog rather than the input: keystrokes in the box bubble up
+     * here, and the arrows keep working even if focus has moved off the input.
+     */
+    const onKeyDown = (e: React.KeyboardEvent) => {
+        const row = rows[cursor];
+        if (e.key === "ArrowDown" || (e.key === "n" && e.ctrlKey)) {
+            e.preventDefault();
+            setCursor((c) => Math.min(rows.length - 1, c + 1));
+        } else if (e.key === "ArrowUp" || (e.key === "p" && e.ctrlKey)) {
+            e.preventDefault();
+            setCursor((c) => Math.max(0, c - 1));
+        } else if (e.key === "Enter") {
+            e.preventDefault();
+            if (row) choose(row);
+        } else if (e.key === " " && multiple) {
+            // Safe to claim: a namespace is a DNS label and a context name with
+            // a space in it is not a thing anyone has to search for by space.
+            e.preventDefault();
+            if (row) choose(row);
+        } else if (e.key === "Escape") {
+            e.preventDefault();
+            onClose();
+        }
+    };
+
     return createPortal(
         <div className="overlay palette-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-            <div className="palette picker-palette" role="dialog" aria-modal="true" aria-label={title}>
+            <div
+                className="palette picker-palette"
+                role="dialog"
+                aria-modal="true"
+                aria-label={title}
+                onKeyDown={onKeyDown}
+            >
                 <div className="palette-input">
                     {icon ?? <Icon.Search size={15} />}
                     <input
+                        ref={inputRef}
                         autoFocus
                         placeholder={placeholder}
                         value={q}
                         onChange={(e) => setQ(e.target.value)}
-                        onKeyDown={(e) => {
-                            const row = rows[cursor];
-                            if (e.key === "ArrowDown" || (e.key === "n" && e.ctrlKey)) {
-                                e.preventDefault();
-                                setCursor((c) => Math.min(rows.length - 1, c + 1));
-                            } else if (e.key === "ArrowUp" || (e.key === "p" && e.ctrlKey)) {
-                                e.preventDefault();
-                                setCursor((c) => Math.max(0, c - 1));
-                            } else if (e.key === "Enter") {
-                                e.preventDefault();
-                                if (row) choose(row);
-                            } else if (e.key === " " && multiple) {
-                                // Safe to claim: a namespace is a DNS label and
-                                // a context name with a space in it is not a
-                                // thing anyone has to search for by space.
-                                e.preventDefault();
-                                if (row) choose(row);
-                            } else if (e.key === "Escape") {
-                                e.preventDefault();
-                                onClose();
-                            }
-                        }}
                     />
                     {count > 1 ? <span className="picker-count mono">{count}</span> : null}
                 </div>
@@ -172,6 +186,11 @@ export function Picker(props: SingleProps | MultiProps) {
                                     data-index={i}
                                     className={`palette-item ${i === cursor ? "on" : ""} ${on ? "picked" : ""}`}
                                     onMouseEnter={() => setCursor(i)}
+                                    // Keep the caret in the search box: a click
+                                    // that focuses the button leaves the arrows
+                                    // with nothing to move, which is exactly
+                                    // what happens after picking one by mouse.
+                                    onMouseDown={(e) => e.preventDefault()}
                                     onClick={() => choose(row)}
                                 >
                                     <span className="pi-icon">

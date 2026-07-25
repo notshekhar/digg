@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.4.1
+
+- **Fixed: picking a namespace with the mouse killed the arrow keys.** The key
+  handler lived on the search input, and clicking a row moved focus to that
+  row's button — so after one mouse click the highlight could not be moved from
+  the keyboard at all. Rows no longer take focus on mousedown, the handler sits
+  on the dialog where keystrokes bubble to it either way, and the caret is put
+  back in the search box after every toggle. Type, click, arrow, space, in any
+  order.
+
 ## v1.4.0
 
 - **Fixed: switching cluster forgot where you were in it.** Every switch

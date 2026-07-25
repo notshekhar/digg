@@ -1,6 +1,6 @@
 {
     "name": "digg",
-    "version": "1.4.0",
+    "version": "1.4.1",
     "description": "digg \u2014 a Kubernetes cockpit in your browser, driven by your local kubectl.",
     "type": "module",
     "license": "MIT",
