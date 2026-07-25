@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.1.1
 
 - **Fixed: opening the console squashed the page behind it.** Panels in a
   scrolling flex column inherit `flex-shrink: 1`, and `.panel` sets
