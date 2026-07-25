@@ -298,6 +298,18 @@ export async function setSuspend(ref: ResourceRef, suspend: boolean): Promise<st
     return runOrThrow(args, ref.context);
 }
 
+/**
+ * JSON merge patch. `null` for a value deletes that key, which is how the data
+ * editor removes a ConfigMap/Secret entry without rewriting the whole object.
+ */
+export async function patchResource(ref: ResourceRef, patch: unknown): Promise<string> {
+    const args = ["patch", ref.kind, ref.name, "--type", "merge", "-p", JSON.stringify(patch)];
+    if (ref.namespace) {
+        args.push("-n", ref.namespace);
+    }
+    return runOrThrow(args, ref.context);
+}
+
 /** Manually trigger a CronJob by creating a one-off Job from it. */
 export async function triggerCronJob(ref: ResourceRef): Promise<string> {
     const jobName = `${ref.name}-manual-${Date.now().toString(36)}`.slice(0, 63);
@@ -308,7 +320,153 @@ export async function triggerCronJob(ref: ResourceRef): Promise<string> {
     return runOrThrow(args, ref.context);
 }
 
-// ── interactive arg builders (app.ts owns the spawn + TUI suspend/resume) ─────
+/** Delete with the knobs the web UI exposes: grace period and --force. */
+export async function deleteResourceWith(
+    ref: ResourceRef,
+    opts: { force?: boolean; gracePeriod?: number } = {},
+): Promise<string> {
+    const args = ["delete", ref.kind, ref.name];
+    if (ref.namespace) {
+        args.push("-n", ref.namespace);
+    }
+    if (opts.gracePeriod !== undefined) {
+        args.push(`--grace-period=${opts.gracePeriod}`);
+    }
+    if (opts.force) {
+        // --force without an explicit grace period is rejected by kubectl.
+        if (opts.gracePeriod === undefined) args.push("--grace-period=0");
+        args.push("--force");
+    }
+    return runOrThrow(args, ref.context);
+}
+
+/** `kubectl rollout history` rows for a workload, newest first. */
+export async function rolloutHistory(ref: ResourceRef): Promise<{ revision: string; change: string }[]> {
+    const args = ["rollout", "history", `${ref.kind}/${ref.name}`];
+    if (ref.namespace) {
+        args.push("-n", ref.namespace);
+    }
+    const result = await run(args, ref.context);
+    if (result.code !== 0) return [];
+    const rows: { revision: string; change: string }[] = [];
+    for (const line of result.stdout.split("\n")) {
+        const m = /^(\d+)\s+(.*)$/.exec(line.trim());
+        if (m) rows.push({ revision: m[1]!, change: m[2]!.trim() });
+    }
+    return rows.reverse();
+}
+
+export async function rolloutUndo(ref: ResourceRef, revision?: string): Promise<string> {
+    const args = ["rollout", "undo", `${ref.kind}/${ref.name}`];
+    if (revision) args.push(`--to-revision=${revision}`);
+    if (ref.namespace) {
+        args.push("-n", ref.namespace);
+    }
+    return runOrThrow(args, ref.context);
+}
+
+/** `kubectl rollout status` in one shot (no --watch) for a status pill. */
+export async function rolloutStatus(ref: ResourceRef): Promise<string> {
+    const args = ["rollout", "status", `${ref.kind}/${ref.name}`, "--timeout=2s"];
+    if (ref.namespace) {
+        args.push("-n", ref.namespace);
+    }
+    const result = await run(args, ref.context);
+    return (result.stdout || result.stderr).trim();
+}
+
+// ── metrics ────────────────────────────────────────────────────────────────
+
+export interface NodeMetrics {
+    cpu: string;
+    cpuPercent: number | null;
+    memory: string;
+    memoryPercent: number | null;
+}
+
+/**
+ * Per-node CPU/memory via `kubectl top nodes`. Like topPods, a cluster without
+ * metrics-server gets an empty map instead of an error — metrics are a bonus
+ * column, never a precondition for browsing.
+ */
+export async function topNodes(context: string): Promise<Map<string, NodeMetrics>> {
+    const result = await run(["top", "nodes", "--no-headers"], context);
+    const map = new Map<string, NodeMetrics>();
+    if (result.code !== 0) return map;
+    for (const line of result.stdout.split("\n")) {
+        const cols = line.trim().split(/\s+/);
+        // NAME CPU(cores) CPU% MEMORY(bytes) MEMORY%
+        if (cols.length >= 5) {
+            map.set(cols[0]!, {
+                cpu: cols[1]!,
+                cpuPercent: pct(cols[2]!),
+                memory: cols[3]!,
+                memoryPercent: pct(cols[4]!),
+            });
+        }
+    }
+    return map;
+}
+
+function pct(value: string): number | null {
+    const n = Number(value.replace("%", ""));
+    return Number.isFinite(n) ? n : null;
+}
+
+/** Cluster-wide (or namespaced) events, newest first. */
+export async function listEvents(
+    context: string,
+    namespace: string | undefined,
+    limit = 500,
+): Promise<(K8sEvent & { object: string; namespace: string })[]> {
+    const args = ["get", "events", "-o", "json"];
+    if (namespace) {
+        args.push("-n", namespace);
+    } else {
+        args.push("-A");
+    }
+    const result = await run(args, context);
+    if (result.code !== 0) return [];
+    const parsed = JSON.parse(result.stdout) as {
+        items?: (RawEvent & {
+            metadata?: { namespace?: string };
+            involvedObject?: { kind?: string; name?: string };
+        })[];
+    };
+    const rows = (parsed.items ?? []).map((e) => ({
+        ...normalizeEvent(e),
+        object: `${e.involvedObject?.kind ?? ""}/${e.involvedObject?.name ?? ""}`,
+        namespace: e.metadata?.namespace ?? "",
+    }));
+    rows.sort((a, b) => new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime());
+    return rows.slice(0, limit);
+}
+
+export interface ClusterVersion {
+    client: string;
+    server: string;
+    platform: string;
+}
+
+export async function clusterVersion(context: string): Promise<ClusterVersion> {
+    const result = await run(["version", "-o", "json"], context);
+    const out: ClusterVersion = { client: "", server: "", platform: "" };
+    if (result.code !== 0 && !result.stdout) return out;
+    try {
+        const v = JSON.parse(result.stdout) as {
+            clientVersion?: { gitVersion?: string };
+            serverVersion?: { gitVersion?: string; platform?: string };
+        };
+        out.client = v.clientVersion?.gitVersion ?? "";
+        out.server = v.serverVersion?.gitVersion ?? "";
+        out.platform = v.serverVersion?.platform ?? "";
+    } catch {
+        /* kubectl printed something that isn't json — leave the blanks */
+    }
+    return out;
+}
+
+// ── interactive arg builders (src/web/exec.ts owns the pty and the spawn) ────
 
 /** kubectl argv (sans "kubectl") for an interactive shell into a pod container. */
 export function execArgs(ref: ResourceRef, container: string | undefined, shell: string): string[] {

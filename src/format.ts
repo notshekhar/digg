@@ -1,4 +1,3 @@
-import chalk from "chalk";
 import type { K8sObject } from "./kubectl.ts";
 
 export interface KindDef {
@@ -49,21 +48,6 @@ function podStatus(obj: K8sObject): string {
     return ((obj.status as { phase?: string })?.phase) ?? "";
 }
 
-/** Colorize a status/phase string for terminals. */
-export function colorizeStatus(value: string): string {
-    const v = value.toLowerCase();
-    if (v === "running" || v === "active" || v === "ready" || v === "bound" || v === "succeeded") {
-        return chalk.green(value);
-    }
-    if (v === "pending" || v === "containercreating" || v === "terminating" || v === "notready") {
-        return chalk.yellow(value);
-    }
-    if (v.includes("error") || v.includes("failed") || v === "crashloopbackoff" || v === "evicted" || v === "oomkilled") {
-        return chalk.red(value);
-    }
-    return value;
-}
-
 const deployReady = (obj: K8sObject): string => {
     const s = obj.status as { readyReplicas?: number; replicas?: number };
     return `${s?.readyReplicas ?? 0}/${s?.replicas ?? 0}`;
@@ -74,7 +58,6 @@ const none = (v: string | undefined | null): string => (v && v.length > 0 ? v : 
 const podNode = (o: K8sObject): string => (o.spec as { nodeName?: string })?.nodeName ?? "";
 const podIP = (o: K8sObject): string => (o.status as { podIP?: string })?.podIP ?? "";
 
-/** kubectl-style pod phase: surfaces waiting/terminated reasons and Terminating. */
 export function podPhase(obj: K8sObject): string {
     if ((obj.metadata as { deletionTimestamp?: string })?.deletionTimestamp) {
         return "Terminating";
@@ -349,7 +332,358 @@ export const KINDS: KindDef[] = [
             age(o),
         ],
     },
+
+    // ── the rest of the built-in API surface ───────────────────────────────
+    //
+    // Everything below exists so a cluster browser is never a dead end: RBAC,
+    // storage, policy and scheduling kinds all get real columns instead of the
+    // NAME/STATUS/AGE fallback in genericKind(). Column choices follow
+    // `kubectl get`'s own output, because that is the table every operator has
+    // already memorised.
+
+    {
+        // Events are the one kind whose NAME column is noise (a hash), so the
+        // first column is the object the event is about.
+        name: "events",
+        title: "Events",
+        kind: "Event",
+        columns: ["TYPE", "REASON", "OBJECT", "MESSAGE", "COUNT", "LAST SEEN"],
+        row: (o) => {
+            const inv = o.involvedObject as { kind?: string; name?: string } | undefined;
+            const last = (o.lastTimestamp as string) ?? (o.eventTime as string) ?? (o.firstTimestamp as string) ?? "";
+            return [
+                String(o.type ?? "Normal"),
+                String(o.reason ?? ""),
+                inv ? `${inv.kind ?? ""}/${inv.name ?? ""}` : "",
+                String(o.message ?? "").replace(/\s+/g, " ").trim(),
+                String(o.count ?? 1),
+                ageFrom(last) || "-",
+            ];
+        },
+    },
+    {
+        name: "replicasets",
+        title: "ReplicaSets",
+        kind: "ReplicaSet",
+        columns: ["NAME", "DESIRED", "CURRENT", "READY", "AGE"],
+        row: (o) => {
+            const s = o.status as { replicas?: number; availableReplicas?: number; readyReplicas?: number };
+            return [
+                NAME(o),
+                String((o.spec as { replicas?: number })?.replicas ?? 0),
+                String(s?.replicas ?? 0),
+                String(s?.readyReplicas ?? 0),
+                age(o),
+            ];
+        },
+    },
+    {
+        name: "endpoints",
+        title: "Endpoints",
+        kind: "Endpoints",
+        columns: ["NAME", "ENDPOINTS", "AGE"],
+        row: (o) => [NAME(o), endpointAddresses(o), age(o)],
+    },
+    {
+        name: "endpointslices",
+        title: "EndpointSlices",
+        kind: "EndpointSlice",
+        columns: ["NAME", "ADDRESSTYPE", "PORTS", "ENDPOINTS", "AGE"],
+        row: (o) => {
+            const ports = (o.ports as { port?: number }[] | undefined) ?? [];
+            const eps = (o.endpoints as { addresses?: string[] }[] | undefined) ?? [];
+            return [
+                NAME(o),
+                String(o.addressType ?? ""),
+                ports.map((p) => String(p.port ?? "")).join(",") || "<unset>",
+                eps.flatMap((e) => e.addresses ?? []).join(",") || "<unset>",
+                age(o),
+            ];
+        },
+    },
+    {
+        name: "networkpolicies",
+        title: "NetworkPolicies",
+        kind: "NetworkPolicy",
+        columns: ["NAME", "POD-SELECTOR", "AGE"],
+        row: (o) => [NAME(o), selectorText((o.spec as { podSelector?: unknown })?.podSelector), age(o)],
+    },
+    {
+        name: "ingressclasses",
+        title: "IngressClasses",
+        kind: "IngressClass",
+        clusterScoped: true,
+        columns: ["NAME", "CONTROLLER", "AGE"],
+        row: (o) => [NAME(o), String((o.spec as { controller?: string })?.controller ?? ""), age(o)],
+    },
+    {
+        name: "persistentvolumes",
+        title: "PersistentVolumes",
+        kind: "PersistentVolume",
+        clusterScoped: true,
+        columns: ["NAME", "CAPACITY", "ACCESS", "RECLAIM", "STATUS", "CLAIM", "STORAGECLASS", "AGE"],
+        row: (o) => {
+            const spec = o.spec as {
+                capacity?: { storage?: string };
+                persistentVolumeReclaimPolicy?: string;
+                storageClassName?: string;
+                claimRef?: { namespace?: string; name?: string };
+            };
+            const claim = spec?.claimRef?.name ? `${spec.claimRef.namespace ?? ""}/${spec.claimRef.name}` : "";
+            return [
+                NAME(o),
+                spec?.capacity?.storage ?? "",
+                pvcAccessModes(o),
+                spec?.persistentVolumeReclaimPolicy ?? "",
+                String((o.status as { phase?: string })?.phase ?? ""),
+                none(claim),
+                none(spec?.storageClassName),
+                age(o),
+            ];
+        },
+    },
+    {
+        name: "storageclasses",
+        title: "StorageClasses",
+        kind: "StorageClass",
+        clusterScoped: true,
+        columns: ["NAME", "PROVISIONER", "RECLAIM", "BINDING", "DEFAULT", "AGE"],
+        row: (o) => {
+            const ann = (o.metadata as { annotations?: Record<string, string> })?.annotations ?? {};
+            const isDefault =
+                ann["storageclass.kubernetes.io/is-default-class"] === "true" ||
+                ann["storageclass.beta.kubernetes.io/is-default-class"] === "true";
+            return [
+                NAME(o),
+                String(o.provisioner ?? ""),
+                String(o.reclaimPolicy ?? ""),
+                String(o.volumeBindingMode ?? ""),
+                isDefault ? "true" : "false",
+                age(o),
+            ];
+        },
+    },
+    {
+        name: "serviceaccounts",
+        title: "ServiceAccounts",
+        kind: "ServiceAccount",
+        columns: ["NAME", "SECRETS", "AGE"],
+        row: (o) => [NAME(o), String(((o.secrets as unknown[]) ?? []).length), age(o)],
+    },
+    {
+        name: "roles",
+        title: "Roles",
+        kind: "Role",
+        columns: ["NAME", "RULES", "AGE"],
+        row: (o) => [NAME(o), String(((o.rules as unknown[]) ?? []).length), age(o)],
+    },
+    {
+        name: "rolebindings",
+        title: "RoleBindings",
+        kind: "RoleBinding",
+        columns: ["NAME", "ROLE", "SUBJECTS", "AGE"],
+        row: (o) => [NAME(o), roleRefText(o), subjectsText(o), age(o)],
+    },
+    {
+        name: "clusterroles",
+        title: "ClusterRoles",
+        kind: "ClusterRole",
+        clusterScoped: true,
+        columns: ["NAME", "RULES", "AGE"],
+        row: (o) => [NAME(o), String(((o.rules as unknown[]) ?? []).length), age(o)],
+    },
+    {
+        name: "clusterrolebindings",
+        title: "ClusterRoleBindings",
+        kind: "ClusterRoleBinding",
+        clusterScoped: true,
+        columns: ["NAME", "ROLE", "SUBJECTS", "AGE"],
+        row: (o) => [NAME(o), roleRefText(o), subjectsText(o), age(o)],
+    },
+    {
+        name: "horizontalpodautoscalers",
+        title: "HPAs",
+        kind: "HorizontalPodAutoscaler",
+        columns: ["NAME", "REFERENCE", "TARGETS", "MIN", "MAX", "REPLICAS", "AGE"],
+        row: (o) => {
+            const spec = o.spec as {
+                scaleTargetRef?: { kind?: string; name?: string };
+                minReplicas?: number;
+                maxReplicas?: number;
+            };
+            const status = o.status as { currentReplicas?: number };
+            const ref = spec?.scaleTargetRef;
+            return [
+                NAME(o),
+                ref ? `${(ref.kind ?? "").toLowerCase()}/${ref.name ?? ""}` : "",
+                hpaTargets(o),
+                String(spec?.minReplicas ?? 1),
+                String(spec?.maxReplicas ?? ""),
+                String(status?.currentReplicas ?? 0),
+                age(o),
+            ];
+        },
+    },
+    {
+        name: "poddisruptionbudgets",
+        title: "PodDisruptionBudgets",
+        kind: "PodDisruptionBudget",
+        columns: ["NAME", "MIN AVAILABLE", "MAX UNAVAILABLE", "ALLOWED", "AGE"],
+        row: (o) => {
+            const spec = o.spec as { minAvailable?: unknown; maxUnavailable?: unknown };
+            const status = o.status as { disruptionsAllowed?: number };
+            return [
+                NAME(o),
+                spec?.minAvailable === undefined ? "N/A" : String(spec.minAvailable),
+                spec?.maxUnavailable === undefined ? "N/A" : String(spec.maxUnavailable),
+                String(status?.disruptionsAllowed ?? 0),
+                age(o),
+            ];
+        },
+    },
+    {
+        name: "resourcequotas",
+        title: "ResourceQuotas",
+        kind: "ResourceQuota",
+        columns: ["NAME", "USED", "HARD", "AGE"],
+        row: (o) => {
+            const status = o.status as { used?: Record<string, string>; hard?: Record<string, string> };
+            const count = (r?: Record<string, string>) => String(Object.keys(r ?? {}).length);
+            return [NAME(o), `${count(status?.used)} keys`, `${count(status?.hard)} keys`, age(o)];
+        },
+    },
+    {
+        name: "limitranges",
+        title: "LimitRanges",
+        kind: "LimitRange",
+        columns: ["NAME", "LIMITS", "AGE"],
+        row: (o) => [NAME(o), String((((o.spec as { limits?: unknown[] })?.limits) ?? []).length), age(o)],
+    },
+    {
+        name: "priorityclasses",
+        title: "PriorityClasses",
+        kind: "PriorityClass",
+        clusterScoped: true,
+        columns: ["NAME", "VALUE", "GLOBAL-DEFAULT", "PREEMPTION", "AGE"],
+        row: (o) => [
+            NAME(o),
+            String(o.value ?? ""),
+            String(o.globalDefault ?? false),
+            String(o.preemptionPolicy ?? "PreemptLowerPriority"),
+            age(o),
+        ],
+    },
+    {
+        name: "runtimeclasses",
+        title: "RuntimeClasses",
+        kind: "RuntimeClass",
+        clusterScoped: true,
+        columns: ["NAME", "HANDLER", "AGE"],
+        row: (o) => [NAME(o), String(o.handler ?? ""), age(o)],
+    },
+    {
+        name: "leases",
+        title: "Leases",
+        kind: "Lease",
+        columns: ["NAME", "HOLDER", "AGE"],
+        row: (o) => [NAME(o), none((o.spec as { holderIdentity?: string })?.holderIdentity), age(o)],
+    },
+    {
+        name: "mutatingwebhookconfigurations",
+        title: "Mutating Webhooks",
+        kind: "MutatingWebhookConfiguration",
+        clusterScoped: true,
+        columns: ["NAME", "WEBHOOKS", "AGE"],
+        row: (o) => [NAME(o), String(((o.webhooks as unknown[]) ?? []).length), age(o)],
+    },
+    {
+        name: "validatingwebhookconfigurations",
+        title: "Validating Webhooks",
+        kind: "ValidatingWebhookConfiguration",
+        clusterScoped: true,
+        columns: ["NAME", "WEBHOOKS", "AGE"],
+        row: (o) => [NAME(o), String(((o.webhooks as unknown[]) ?? []).length), age(o)],
+    },
+    {
+        name: "customresourcedefinitions",
+        title: "CRDs",
+        kind: "CustomResourceDefinition",
+        clusterScoped: true,
+        columns: ["NAME", "GROUP", "VERSION", "SCOPE", "AGE"],
+        row: (o) => {
+            const spec = o.spec as {
+                group?: string;
+                scope?: string;
+                versions?: { name?: string; served?: boolean; storage?: boolean }[];
+            };
+            const stored = spec?.versions?.find((v) => v.storage) ?? spec?.versions?.[0];
+            return [NAME(o), spec?.group ?? "", stored?.name ?? "", spec?.scope ?? "", age(o)];
+        },
+    },
 ];
+
+// ── column helpers for the kinds above ──────────────────────────────────────
+
+function endpointAddresses(o: K8sObject): string {
+    const subsets = (o.subsets as { addresses?: { ip?: string }[]; ports?: { port?: number }[] }[] | undefined) ?? [];
+    const out: string[] = [];
+    for (const s of subsets) {
+        for (const a of s.addresses ?? []) {
+            for (const p of s.ports ?? []) {
+                out.push(`${a.ip}:${p.port}`);
+            }
+            if (!(s.ports ?? []).length && a.ip) out.push(a.ip);
+        }
+    }
+    if (!out.length) return "<none>";
+    // kubectl truncates the same way; a full endpoint list can be hundreds long.
+    return out.length > 3 ? `${out.slice(0, 3).join(",")} +${out.length - 3} more` : out.join(",");
+}
+
+function selectorText(sel: unknown): string {
+    const s = sel as { matchLabels?: Record<string, string>; matchExpressions?: unknown[] } | undefined;
+    const labels = Object.entries(s?.matchLabels ?? {}).map(([k, v]) => `${k}=${v}`);
+    if (s?.matchExpressions?.length) labels.push(`+${s.matchExpressions.length} expr`);
+    return labels.length ? labels.join(",") : "<none>";
+}
+
+function roleRefText(o: K8sObject): string {
+    const ref = o.roleRef as { kind?: string; name?: string } | undefined;
+    return ref ? `${ref.kind ?? ""}/${ref.name ?? ""}` : "";
+}
+
+function subjectsText(o: K8sObject): string {
+    const subjects = (o.subjects as { kind?: string; name?: string }[] | undefined) ?? [];
+    if (!subjects.length) return "<none>";
+    const first = subjects.map((s) => `${s.kind ?? ""}:${s.name ?? ""}`);
+    return first.length > 2 ? `${first.slice(0, 2).join(", ")} +${first.length - 2}` : first.join(", ");
+}
+
+function hpaTargets(o: K8sObject): string {
+    const status = o.status as { currentMetrics?: unknown[] } | undefined;
+    const spec = o.spec as { metrics?: unknown[] } | undefined;
+    const specs = (spec?.metrics ?? []) as {
+        type?: string;
+        resource?: { name?: string; target?: { averageUtilization?: number; averageValue?: string } };
+    }[];
+    const current = (status?.currentMetrics ?? []) as {
+        resource?: { name?: string; current?: { averageUtilization?: number; averageValue?: string } };
+    }[];
+    if (!specs.length) return "<none>";
+    return specs
+        .map((m, i) => {
+            const name = m.resource?.name ?? m.type ?? "";
+            const want =
+                m.resource?.target?.averageUtilization !== undefined
+                    ? `${m.resource.target.averageUtilization}%`
+                    : (m.resource?.target?.averageValue ?? "?");
+            const cur = current[i]?.resource?.current;
+            const have =
+                cur?.averageUtilization !== undefined ? `${cur.averageUtilization}%` : (cur?.averageValue ?? "<unknown>");
+            return `${name}: ${have}/${want}`;
+        })
+        .join(", ");
+}
 
 export function findKind(name: string): KindDef | undefined {
     return KINDS.find((k) => k.name === name);

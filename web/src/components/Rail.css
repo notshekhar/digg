@@ -1,0 +1,140 @@
+.rail {
+    display: flex;
+    flex-direction: column;
+    width: var(--rail-w);
+    flex: 0 0 var(--rail-w);
+    height: 100%;
+    background: var(--bg-rail);
+    border-right: 1px solid var(--line);
+    min-height: 0;
+}
+
+.rail-brand {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 0 12px;
+    height: var(--bar-h);
+    flex: 0 0 auto;
+    border-bottom: 1px solid var(--line);
+}
+.rail-brand .mark {
+    width: 11px;
+    height: 11px;
+    background: var(--accent);
+    flex: 0 0 auto;
+}
+.rail-brand .name {
+    font-size: 15px;
+    font-weight: 650;
+    letter-spacing: -0.03em;
+}
+.rail-brand .ver {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--fg-faint);
+}
+
+.rail-search {
+    padding: 8px;
+    flex: 0 0 auto;
+}
+
+.rail-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 6px 16px;
+}
+
+.navrow {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    padding: 5px 8px;
+    background: none;
+    border: 0;
+    color: var(--fg-muted);
+    cursor: pointer;
+    text-align: left;
+    font-size: 12.5px;
+    line-height: 1.4;
+    min-height: 26px;
+}
+.navrow:hover {
+    background: var(--bg-hover);
+    color: var(--fg);
+}
+.navrow > svg {
+    color: var(--fg-faint);
+    flex: 0 0 auto;
+}
+.navrow:hover > svg {
+    color: var(--fg);
+}
+.navrow[aria-current="true"] {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 550;
+    box-shadow: inset 2px 0 0 var(--accent);
+}
+.navrow[aria-current="true"] > svg {
+    color: var(--accent);
+}
+.navrow .label {
+    flex: 1;
+    min-width: 0;
+}
+.navrow.kind {
+    padding-left: 30px;
+    min-height: 24px;
+    font-size: 12.5px;
+}
+
+.rail-group {
+    margin-top: 6px;
+}
+.rail-group-head {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    width: 100%;
+    padding: 4px 8px;
+    background: none;
+    border: 0;
+    cursor: pointer;
+    color: var(--fg-faint);
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    text-align: left;
+}
+.rail-group-head:hover {
+    color: var(--fg);
+}
+.rail-group-head.has-active {
+    color: var(--accent);
+}
+.rail-group-head .caret {
+    display: inline-flex;
+    transition: transform 0.12s ease;
+}
+.rail-group-head .caret.open {
+    transform: rotate(90deg);
+}
+.rail-group-head .label {
+    flex: 1;
+}
+.rail-group-head .count {
+    font-size: 10px;
+    opacity: 0.7;
+    letter-spacing: 0;
+}
+
+.rail-empty {
+    padding: 14px 10px;
+    color: var(--fg-faint);
+    font-size: 12px;
+}

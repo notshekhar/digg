@@ -1,0 +1,91 @@
+.app {
+    display: flex;
+    height: 100%;
+    min-height: 0;
+}
+
+.main {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    /* Room for the console, which is fixed and would otherwise cover the tail
+       of every page. Set by components/Console.tsx while it is open. */
+    padding-bottom: var(--console-h, 0px);
+}
+
+.workspace {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+}
+
+.content {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+}
+
+.boot,
+.boot-error {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    height: 100%;
+    padding: 24px;
+    text-align: center;
+}
+.boot {
+    flex-direction: row;
+}
+.boot-error h1 {
+    font-size: 17px;
+}
+.boot-error pre {
+    max-width: 620px;
+    padding: 10px 12px;
+    background: var(--bad-soft);
+    border: 1px solid color-mix(in oklab, var(--bad) 40%, transparent);
+    font-size: 12px;
+    white-space: pre-wrap;
+    text-align: left;
+}
+.boot-error p {
+    max-width: 520px;
+    font-size: 12.5px;
+    line-height: 1.6;
+}
+.boot-error code {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--fg);
+}
+
+.keylist-help {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+.keyhelp {
+    display: grid;
+    grid-template-columns: 170px 1fr;
+    gap: 12px;
+    align-items: baseline;
+    font-size: 12.5px;
+    color: var(--fg-muted);
+}
+.keyhelp kbd {
+    justify-self: start;
+}
+
+@media (max-width: 860px) {
+    .rail {
+        display: none;
+    }
+}

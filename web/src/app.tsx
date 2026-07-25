@@ -1,0 +1,214 @@
+/**
+ * The shell: boot, layout, keymap, and which page is on screen.
+ *
+ * Layout is three fixed regions and two floating ones — rail, top bar, content;
+ * a drawer that slides in from the right and a dock that rises from the bottom.
+ * Nothing scrolls the page itself, so the grid header stays put no matter how
+ * many rows the cluster has.
+ */
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Console } from "./components/Console.tsx";
+import { Palette } from "./components/Palette.tsx";
+import { Rail } from "./components/Rail.tsx";
+import { TopBar } from "./components/TopBar.tsx";
+import { Modal, Toasts } from "./components/ui.tsx";
+import { ActionDialogs } from "./lib/actions.tsx";
+import { api, boot0 } from "./lib/api.ts";
+import { useHotkeys } from "./lib/hooks.ts";
+import { navigate, useRoute } from "./lib/router.ts";
+import { useNamespaces, useTab } from "./lib/query.ts";
+import { refreshNow, setDock, setState, toast, useApp } from "./lib/store.ts";
+import type { ResourceRef } from "./lib/types.ts";
+import { DetailPage } from "./pages/DetailPage.tsx";
+import { EventsPage } from "./pages/EventsPage.tsx";
+import { ListPage } from "./pages/ListPage.tsx";
+import { OverviewPage } from "./pages/OverviewPage.tsx";
+import "./app.css";
+
+export function App() {
+    const route = useRoute();
+    const ready = useApp((s) => s.ready);
+    const error = useApp((s) => s.error);
+    const dockOpen = useApp((s) => s.dock.open);
+    const [palette, setPalette] = useState(false);
+    const [help, setHelp] = useState(false);
+    const [selectedNs, setSelectedNs] = useNamespaces();
+    const [, setTab] = useTab();
+    const nsRef = useRef({ selectedNs, setSelectedNs });
+    nsRef.current = { selectedNs, setSelectedNs };
+
+    // ── boot ───────────────────────────────────────────────────────────────
+    useEffect(() => {
+        let live = true;
+        void (async () => {
+            try {
+                const boot = await api.boot();
+                if (!live) return;
+                setState({
+                    ready: true,
+                    error: null,
+                    version: boot.version,
+                    canExec: boot.canExec,
+                    cluster: boot.cluster,
+                    contexts: boot.contexts,
+                    context: boot.context,
+                    namespaces: boot.namespaces,
+                    catalog: boot.catalog,
+                    kinds: boot.kinds,
+                    theme: boot.prefs.theme,
+                    forwards: boot.forwards,
+                });
+                document.documentElement.dataset.theme = boot.prefs.theme;
+                // A URL that already names namespaces wins over the saved
+                // preference: a pasted link must open what it says.
+                if (nsRef.current.selectedNs.length === 0 && boot.namespace) {
+                    void nsRef.current.setSelectedNs([boot.namespace]);
+                }
+            } catch (err) {
+                if (live) setState({ ready: true, error: err instanceof Error ? err.message : String(err) });
+            }
+        })();
+        return () => {
+            live = false;
+        };
+    }, []);
+
+    const openDetail = useCallback(
+        (ref: ResourceRef, nextTab = "overview") => {
+            navigate({ page: "detail", kind: ref.kind, name: ref.name, ns: ref.ns });
+            void setTab(nextTab === "overview" ? null : nextTab);
+        },
+        [setTab],
+    );
+
+    const switchContext = useCallback(async (next: string) => {
+        setState({ context: next, catalog: [] });
+        void setSelectedNs(null);
+        try {
+            const [{ namespaces }, { catalog }] = await Promise.all([api.namespaces(next), api.catalog(next)]);
+            setState({ namespaces, catalog });
+            void api.prefs({ context: next }).catch(() => {});
+            refreshNow();
+        } catch (err) {
+            toast("bad", "Could not switch cluster", err instanceof Error ? err.message : String(err));
+        }
+    }, [setSelectedNs]);
+
+    // ── keymap ─────────────────────────────────────────────────────────────
+    useHotkeys({
+        "mod+k": () => setPalette((p) => !p),
+        "mod+f": () => {
+            const input = document.querySelector<HTMLInputElement>('input[data-filter="1"]');
+            input?.focus();
+            input?.select();
+        },
+        "mod+j": () => setDock({ open: !dockOpen }),
+        "mod+/": () => setHelp((h) => !h),
+        // ⌘R is the browser's reload and stays that way; refresh gets the
+        // option key so nothing familiar is stolen.
+        "mod+alt+r": () => refreshNow(),
+    });
+
+    if (error) {
+        return (
+            <div className="boot-error">
+                <h1>digg could not reach your cluster</h1>
+                <pre className="mono">{error}</pre>
+                <p className="faint">
+                    digg drives your local <code>kubectl</code>. Check that it is on PATH and that{" "}
+                    <code>kubectl config get-contexts</code> lists a cluster.
+                </p>
+                <button className="btn primary" type="button" onClick={() => location.reload()}>
+                    Retry
+                </button>
+            </div>
+        );
+    }
+
+    if (!ready) {
+        return (
+            <div className="boot">
+                <span className="spinner" />
+                <span className="faint">connecting to cluster…</span>
+            </div>
+        );
+    }
+
+    return (
+        <div className="app">
+            <Rail route={route} />
+            <div className="main">
+                <TopBar onPalette={() => setPalette(true)} />
+                <div className="workspace">
+                    <div className="content">
+                        {route.page === "overview" ? (
+                            <OverviewPage onOpen={openDetail} />
+                        ) : route.page === "events" ? (
+                            <EventsPage onOpen={openDetail} />
+                        ) : route.page === "detail" ? (
+                            <DetailPage
+                                key={`${route.kind}/${route.ns ?? "-"}/${route.name}`}
+                                target={{ kind: route.kind, name: route.name, ns: route.ns }}
+                                onOpen={openDetail}
+                            />
+                        ) : (
+                            <ListPage kind={route.kind} onOpen={openDetail} />
+                        )}
+                    </div>
+                </div>
+                {/* Outside the route switch on purpose: shells and forwards
+                    survive navigation and are reachable from every page. */}
+                <Console />
+            </div>
+
+            {palette ? (
+                <Palette
+                    onClose={() => setPalette(false)}
+                    onOpen={openDetail}
+                    onSwitchContext={(c) => void switchContext(c)}
+                />
+            ) : null}
+            {help ? <HelpModal onClose={() => setHelp(false)} /> : null}
+            <ActionDialogs />
+            <Toasts />
+        </div>
+    );
+}
+
+/**
+ * Every global shortcut is a ⌘ chord — see the note in lib/hooks.ts. The rest of
+ * this list is dismissal and in-table movement, which only apply where focus
+ * already is.
+ */
+const KEYS: [string, string][] = [
+    ["⌘K", "Command palette — kinds, namespaces, clusters, pods"],
+    ["⌘F", "Filter the current table"],
+    ["⌘J", "Console — shells and port-forwards"],
+    ["⌘S", "Apply the YAML you are editing"],
+    ["⌘⌥R", "Refresh now"],
+    ["⌘/", "This list"],
+    ["esc", "Back to the table / close what is open"],
+    ["↑ / ↓", "Move the row cursor"],
+    ["enter", "Open the selected row"],
+    ["space", "Select a row (⌘-click and shift-click work too)"],
+    ["right-click", "Actions for a row"],
+];
+
+function HelpModal({ onClose }: { onClose: () => void }) {
+    return (
+        <Modal title="Keyboard" onClose={onClose}>
+            <div className="keylist-help">
+                {KEYS.map(([k, v]) => (
+                    <div className="keyhelp" key={k}>
+                        <kbd>{k}</kbd>
+                        <span>{v}</span>
+                    </div>
+                ))}
+            </div>
+            <p className="dialog-note" style={{ marginTop: 14 }}>
+                digg v{boot0.version} · every action runs through your local kubectl.
+            </p>
+        </Modal>
+    );
+}

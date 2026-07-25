@@ -1,0 +1,187 @@
+/*
+ * digg design tokens.
+ *
+ * Lineage: `hehe` and `markdown serve` — shadcn zinc in oklch, Geist, and every
+ * border-radius at 0. digg diverges on three points, all of them because this
+ * is a cockpit and not a reader:
+ *
+ *   1. CYAN, NOT JADE. Jade is a status colour in Kubernetes (Ready, Running,
+ *      Bound). An accent that collides with "healthy" makes a selected row look
+ *      like a passing check. digg's accent is cyan and the status ramp owns
+ *      green/amber/red outright.
+ *   2. DENSITY IS A FEATURE. 13px base, 26px rows, 30px controls. A cluster
+ *      view is a table you scan, so the type scale is tuned for a thousand rows
+ *      rather than a paragraph.
+ *   3. MACHINE FACTS ARE MONO. Names, images, ids, ages, CPU, memory, ports —
+ *      anything the cluster generated is Geist Mono with tabular numerals so
+ *      columns line up on the digit. Prose is Geist.
+ *
+ * Every value below is a variable because the same page renders in light and
+ * dark, and nothing in a component file may hardcode a colour.
+ */
+
+:root {
+    /* surfaces, dark ------------------------------------------------------ */
+    --bg: oklch(0.19 0.004 285.9);
+    --bg-elev: oklch(0.216 0.006 285.9);
+    --bg-sunk: oklch(0.163 0.004 285.9);
+    --bg-rail: oklch(0.174 0.004 285.9);
+    --bg-bar: oklch(0.163 0.004 285.9);
+    --bg-hover: oklch(1 0 0 / 5%);
+    --bg-active: oklch(1 0 0 / 8%);
+    --bg-overlay: oklch(0.12 0.004 285.9 / 62%);
+
+    /* text ---------------------------------------------------------------- */
+    --fg: oklch(0.985 0 0);
+    --fg-muted: oklch(0.705 0.015 286.1);
+    --fg-faint: oklch(0.554 0.016 285.9);
+    --fg-invert: oklch(0.16 0.004 285.9);
+
+    /* lines --------------------------------------------------------------- */
+    --line: oklch(1 0 0 / 9%);
+    --line-soft: oklch(1 0 0 / 5%);
+    --line-strong: oklch(1 0 0 / 16%);
+
+    /* accent -------------------------------------------------------------- */
+    --accent: oklch(0.78 0.12 220);
+    --accent-strong: oklch(0.88 0.11 220);
+    --accent-soft: oklch(0.78 0.12 220 / 14%);
+    --accent-dim: oklch(0.78 0.12 220 / 40%);
+    --on-accent: oklch(0.16 0.02 220);
+
+    /* status ramp — the only semantic colours in the product -------------- */
+    --ok: oklch(0.76 0.14 155);
+    --ok-soft: oklch(0.76 0.14 155 / 15%);
+    --warn: oklch(0.82 0.14 85);
+    --warn-soft: oklch(0.82 0.14 85 / 15%);
+    --bad: oklch(0.72 0.16 25);
+    --bad-soft: oklch(0.72 0.16 25 / 15%);
+    --info: oklch(0.74 0.11 265);
+    --info-soft: oklch(0.74 0.11 265 / 15%);
+    --idle: oklch(0.62 0.02 286);
+    --idle-soft: oklch(0.62 0.02 286 / 15%);
+
+    /* charts — distinct hues that survive both themes, ordered by first use */
+    --c1: oklch(0.72 0.13 220);
+    --c2: oklch(0.74 0.14 155);
+    --c3: oklch(0.78 0.13 85);
+    --c4: oklch(0.7 0.15 25);
+    --c5: oklch(0.7 0.13 300);
+    --c6: oklch(0.72 0.1 265);
+
+    /*
+     * Terminal ANSI palette. It lives here, with every other colour, because a
+     * shell in the browser has to change with the theme like everything else —
+     * xterm's built-in palette assumes a black background and turns to mud on
+     * white. Values are resolved to hex before xterm sees them (lib/color.ts).
+     */
+    --t-black: oklch(0.28 0.006 285.9);
+    --t-red: oklch(0.72 0.16 25);
+    --t-green: oklch(0.76 0.14 155);
+    --t-yellow: oklch(0.82 0.14 85);
+    --t-blue: oklch(0.72 0.12 250);
+    --t-magenta: oklch(0.74 0.14 320);
+    --t-cyan: oklch(0.78 0.12 220);
+    --t-white: oklch(0.86 0.005 285.9);
+    --t-bright-black: oklch(0.5 0.008 285.9);
+    --t-bright-red: oklch(0.8 0.15 25);
+    --t-bright-green: oklch(0.85 0.15 155);
+    --t-bright-yellow: oklch(0.9 0.14 90);
+    --t-bright-blue: oklch(0.8 0.11 250);
+    --t-bright-magenta: oklch(0.82 0.13 320);
+    --t-bright-cyan: oklch(0.86 0.11 220);
+    --t-bright-white: oklch(0.99 0 0);
+
+    --glow: radial-gradient(1100px 420px at 82% -14%, oklch(0.78 0.12 220 / 7%), transparent 62%);
+    /*
+     * There are no drop shadows in digg. Depth is carried by borders and
+     * surface tone alone — a flat product with zero border-radius reads as
+     * drawn rather than stacked, and a soft shadow under a hard-cornered panel
+     * looks like a mistake. Inset box-shadow is still used, but only as a rule
+     * (the accent bar on a selected row), never as elevation.
+     */
+
+    /* metrics ------------------------------------------------------------- */
+    --bar-h: 40px; /* top bar */
+    --rail-w: 236px;
+    --row-h: 27px; /* datagrid row */
+    --ctl-h: 28px; /* buttons, inputs, selects */
+
+    --sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    --mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+    /* z-layers, declared in one place so nothing has to guess ------------- */
+    --z-dock: 40;
+    --z-drawer: 60;
+    --z-dialog: 80;
+    --z-palette: 90;
+    --z-toast: 100;
+
+    color-scheme: dark;
+}
+
+html[data-theme="light"] {
+    --bg: oklch(1 0 0);
+    --bg-elev: oklch(0.99 0 0);
+    --bg-sunk: oklch(0.972 0.001 286.4);
+    --bg-rail: oklch(0.982 0.001 286.4);
+    --bg-bar: oklch(1 0 0);
+    --bg-hover: oklch(0.141 0.005 285.8 / 4%);
+    --bg-active: oklch(0.141 0.005 285.8 / 7%);
+    --bg-overlay: oklch(0.35 0.01 286 / 30%);
+
+    --fg: oklch(0.21 0.006 285.9);
+    --fg-muted: oklch(0.505 0.016 285.9);
+    --fg-faint: oklch(0.63 0.014 286);
+    --fg-invert: oklch(0.99 0 0);
+
+    --line: oklch(0.9 0.004 286.3);
+    --line-soft: oklch(0.945 0.003 286.3);
+    --line-strong: oklch(0.83 0.005 286.3);
+
+    --accent: oklch(0.52 0.13 232);
+    --accent-strong: oklch(0.44 0.12 232);
+    --accent-soft: oklch(0.52 0.13 232 / 10%);
+    --accent-dim: oklch(0.52 0.13 232 / 45%);
+    --on-accent: oklch(0.99 0 0);
+
+    --ok: oklch(0.52 0.14 155);
+    --ok-soft: oklch(0.52 0.14 155 / 12%);
+    --warn: oklch(0.6 0.14 72);
+    --warn-soft: oklch(0.6 0.14 72 / 14%);
+    --bad: oklch(0.53 0.2 25);
+    --bad-soft: oklch(0.53 0.2 25 / 12%);
+    --info: oklch(0.52 0.14 265);
+    --info-soft: oklch(0.52 0.14 265 / 12%);
+    --idle: oklch(0.55 0.02 286);
+    --idle-soft: oklch(0.55 0.02 286 / 12%);
+
+    --c1: oklch(0.55 0.13 232);
+    --c2: oklch(0.53 0.14 155);
+    --c3: oklch(0.6 0.14 72);
+    --c4: oklch(0.55 0.19 25);
+    --c5: oklch(0.53 0.15 300);
+    --c6: oklch(0.5 0.12 265);
+
+    /* Same hues, darkened until they are legible on white. */
+    --t-black: oklch(0.3 0.006 285.9);
+    --t-red: oklch(0.52 0.2 25);
+    --t-green: oklch(0.48 0.14 155);
+    --t-yellow: oklch(0.55 0.13 72);
+    --t-blue: oklch(0.5 0.15 250);
+    --t-magenta: oklch(0.5 0.18 320);
+    --t-cyan: oklch(0.48 0.12 232);
+    --t-white: oklch(0.38 0.008 285.9);
+    --t-bright-black: oklch(0.5 0.01 285.9);
+    --t-bright-red: oklch(0.45 0.21 25);
+    --t-bright-green: oklch(0.4 0.14 155);
+    --t-bright-yellow: oklch(0.47 0.13 68);
+    --t-bright-blue: oklch(0.42 0.16 250);
+    --t-bright-magenta: oklch(0.43 0.19 320);
+    --t-bright-cyan: oklch(0.4 0.12 232);
+    --t-bright-white: oklch(0.21 0.006 285.9);
+
+    --glow: radial-gradient(1100px 420px at 82% -14%, oklch(0.52 0.13 232 / 5%), transparent 62%);
+
+    color-scheme: light;
+}

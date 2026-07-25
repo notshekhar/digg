@@ -1,0 +1,436 @@
+/*
+ * Reset, typography, and the primitives every component reuses (buttons,
+ * inputs, badges, chips). Component-specific rules live next to their
+ * component; anything that appears on three or more screens lives here.
+ */
+
+@import "./tokens.css";
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+    border-radius: 0; /* house style: nothing in digg is rounded */
+}
+
+html,
+body,
+#root {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+}
+
+/*
+ * The UA rule for [hidden] loses to any author display rule, so a utility class
+ * that sets display silently un-hides hidden nodes. One !important here instead
+ * of a bug per component.
+ */
+[hidden] {
+    display: none !important;
+}
+
+body {
+    font-family: var(--sans);
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--fg);
+    background: var(--bg);
+    background-image: var(--glow);
+    background-attachment: fixed;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow: hidden; /* the app scrolls in panes, never as a page */
+}
+
+a {
+    color: var(--accent);
+    text-decoration: none;
+}
+a:hover {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+button,
+input,
+select,
+textarea {
+    font: inherit;
+    color: inherit;
+}
+
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
+
+::selection {
+    background: var(--accent-soft);
+}
+
+h1,
+h2,
+h3,
+h4 {
+    margin: 0;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+}
+
+/* Scrollbars: present, thin, and never a scrollbar-shaped hole in the page. */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+}
+*::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+*::-webkit-scrollbar-track {
+    background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+    background: var(--line-strong);
+    border: 3px solid transparent;
+    background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+    background: var(--fg-faint);
+    background-clip: content-box;
+}
+*::-webkit-scrollbar-corner {
+    background: transparent;
+}
+
+/* ---------------------------------------------------------------- helpers */
+
+.mono {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.94em;
+}
+
+.muted {
+    color: var(--fg-muted);
+}
+.faint {
+    color: var(--fg-faint);
+}
+.spring {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.truncate {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+.col {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+/* Section eyebrow: uppercase mono label above a group of facts. */
+.eyebrow {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--fg-faint);
+}
+
+/* ---------------------------------------------------------------- buttons */
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: var(--ctl-h);
+    padding: 0 10px;
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    color: var(--fg);
+    cursor: pointer;
+    white-space: nowrap;
+    user-select: none;
+    font-size: 12.5px;
+}
+.btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    border-color: var(--line-strong);
+}
+.btn:active:not(:disabled) {
+    background: var(--bg-active);
+}
+.btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+.btn.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--on-accent);
+    font-weight: 550;
+}
+.btn.primary:hover:not(:disabled) {
+    background: var(--accent-strong);
+    border-color: var(--accent-strong);
+}
+.btn.danger {
+    color: var(--bad);
+    border-color: color-mix(in oklab, var(--bad) 45%, transparent);
+}
+.btn.danger:hover:not(:disabled) {
+    background: var(--bad-soft);
+}
+.btn.danger.solid {
+    background: var(--bad);
+    border-color: var(--bad);
+    color: oklch(0.99 0 0);
+    font-weight: 550;
+}
+.btn.ghost {
+    background: none;
+    border-color: transparent;
+}
+.btn.ghost:hover:not(:disabled) {
+    background: var(--bg-hover);
+    border-color: var(--line);
+}
+.btn.icon {
+    width: var(--ctl-h);
+    padding: 0;
+}
+.btn.sm {
+    height: 24px;
+    padding: 0 8px;
+    font-size: 12px;
+}
+.btn[aria-pressed="true"] {
+    background: var(--accent-soft);
+    border-color: var(--accent-dim);
+    color: var(--accent);
+}
+
+/* ----------------------------------------------------------------- inputs */
+
+.input,
+.select {
+    height: var(--ctl-h);
+    padding: 0 8px;
+    background: var(--bg-sunk);
+    border: 1px solid var(--line);
+    color: var(--fg);
+    min-width: 0;
+    font-size: 12.5px;
+}
+.input::placeholder {
+    color: var(--fg-faint);
+}
+.input:focus,
+.select:focus {
+    border-color: var(--accent-dim);
+    outline: none;
+}
+.select {
+    appearance: none;
+    padding-right: 22px;
+    background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+        linear-gradient(135deg, currentColor 50%, transparent 50%);
+    background-position:
+        calc(100% - 12px) calc(50% + 1px),
+        calc(100% - 8px) calc(50% + 1px);
+    background-size:
+        4px 4px,
+        4px 4px;
+    background-repeat: no-repeat;
+    cursor: pointer;
+}
+
+/* Search field with a leading glyph slot. */
+.search {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: var(--ctl-h);
+    padding: 0 8px;
+    background: var(--bg-sunk);
+    border: 1px solid var(--line);
+    min-width: 0;
+}
+.search:focus-within {
+    border-color: var(--accent-dim);
+}
+.search input {
+    flex: 1;
+    min-width: 0;
+    background: none;
+    border: 0;
+    outline: none;
+    font-size: 12.5px;
+}
+.search svg {
+    color: var(--fg-faint);
+    flex: 0 0 auto;
+}
+
+/* ----------------------------------------------------------------- badges */
+
+.badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 1px 6px;
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 17px;
+    border: 1px solid transparent;
+    white-space: nowrap;
+}
+.badge.ok {
+    color: var(--ok);
+    background: var(--ok-soft);
+    border-color: color-mix(in oklab, var(--ok) 30%, transparent);
+}
+.badge.warn {
+    color: var(--warn);
+    background: var(--warn-soft);
+    border-color: color-mix(in oklab, var(--warn) 30%, transparent);
+}
+.badge.bad {
+    color: var(--bad);
+    background: var(--bad-soft);
+    border-color: color-mix(in oklab, var(--bad) 30%, transparent);
+}
+.badge.info {
+    color: var(--info);
+    background: var(--info-soft);
+    border-color: color-mix(in oklab, var(--info) 30%, transparent);
+}
+.badge.idle {
+    color: var(--fg-muted);
+    background: var(--idle-soft);
+    border-color: var(--line);
+}
+.badge.accent {
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-color: var(--accent-dim);
+}
+
+/* A 6px square that carries status without stealing a whole badge. */
+.dot {
+    width: 6px;
+    height: 6px;
+    flex: 0 0 auto;
+    background: var(--idle);
+}
+.dot.ok {
+    background: var(--ok);
+}
+.dot.warn {
+    background: var(--warn);
+}
+.dot.bad {
+    background: var(--bad);
+}
+.dot.info {
+    background: var(--info);
+}
+.dot.pulse {
+    animation: dot-pulse 1.6s ease-in-out infinite;
+}
+@keyframes dot-pulse {
+    0%,
+    100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.28;
+    }
+}
+
+/* Key hint, used in the palette and tooltips. */
+kbd {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    padding: 1px 5px;
+    border: 1px solid var(--line);
+    background: var(--bg-sunk);
+    color: var(--fg-muted);
+}
+
+/* ------------------------------------------------------------ empty/error */
+
+.empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 48px 24px;
+    color: var(--fg-muted);
+    text-align: center;
+}
+.empty .title {
+    color: var(--fg);
+    font-size: 14px;
+    font-weight: 550;
+}
+.empty .hint {
+    font-size: 12.5px;
+    max-width: 46ch;
+}
+
+.errbox {
+    margin: 12px;
+    padding: 10px 12px;
+    border: 1px solid color-mix(in oklab, var(--bad) 40%, transparent);
+    background: var(--bad-soft);
+    color: var(--fg);
+    font-family: var(--mono);
+    font-size: 12px;
+    white-space: pre-wrap;
+    overflow-x: auto;
+}
+
+/* Indeterminate progress: a 2px hairline that lives under toolbars. */
+.hairline {
+    position: relative;
+    height: 2px;
+    overflow: hidden;
+    background: transparent;
+    flex: 0 0 auto;
+}
+.hairline::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    transform: translateX(-100%);
+    animation: hairline 1.1s ease-in-out infinite;
+}
+@keyframes hairline {
+    to {
+        transform: translateX(100%);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}

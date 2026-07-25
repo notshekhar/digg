@@ -1,0 +1,37 @@
+.topbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: var(--bar-h);
+    flex: 0 0 auto;
+    padding: 0 10px;
+    background: var(--bg-bar);
+    border-bottom: 1px solid var(--line);
+}
+
+.palette-btn {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    height: var(--ctl-h);
+    padding: 0 8px;
+    min-width: 190px;
+    background: var(--bg-sunk);
+    border: 1px solid var(--line);
+    color: var(--fg-faint);
+    cursor: pointer;
+    font-size: 12.5px;
+}
+.palette-btn:hover {
+    border-color: var(--line-strong);
+    color: var(--fg-muted);
+}
+.palette-btn kbd {
+    margin-left: auto;
+}
+
+.topbar-note {
+    font-size: 11px;
+    color: var(--fg-faint);
+    padding: 0 4px;
+}

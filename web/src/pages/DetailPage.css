@@ -1,0 +1,226 @@
+/* Full-page resource view. */
+
+.page.detail {
+    background: var(--bg);
+}
+
+.detail-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--line);
+    flex: 0 0 auto;
+    min-width: 0;
+}
+
+.backbtn {
+    color: var(--fg-muted);
+    gap: 5px;
+    flex: 0 0 auto;
+}
+.backbtn:hover {
+    color: var(--fg);
+}
+.backarrow {
+    display: inline-flex;
+    transform: rotate(180deg);
+}
+
+.detail-id {
+    display: flex;
+    align-items: baseline;
+    gap: 9px;
+    min-width: 0;
+    /* A thin rule between the breadcrumb and the object reads as a path
+       separator without spending a glyph on it. */
+    padding-left: 10px;
+    border-left: 1px solid var(--line);
+}
+.detail-id h1 {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+}
+.detail-ns {
+    background: none;
+    border: 0;
+    padding: 0;
+    font-size: 11.5px;
+    color: var(--fg-faint);
+    cursor: pointer;
+}
+.detail-ns:hover {
+    color: var(--accent);
+}
+
+.detail-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Reading content gets a column; code and logs get the whole width. */
+.detail-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+    max-width: 1180px;
+    margin: 0 auto;
+}
+
+.detail-section {
+    border: 1px solid var(--line);
+    background: var(--bg-elev);
+}
+.detail-section-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 9px;
+    background: var(--bg-sunk);
+    border-bottom: 1px solid var(--line);
+}
+.detail-section-head h3 {
+    font-size: 11.5px;
+    font-weight: 600;
+}
+.detail-empty {
+    padding: 12px;
+    font-size: 12px;
+}
+.detail-empty.pad {
+    padding: 30px 12px;
+    text-align: center;
+}
+.detail-actionrow {
+    display: flex;
+    gap: 8px;
+}
+
+.minitable {
+    display: flex;
+    flex-direction: column;
+    overflow-x: auto;
+}
+.mt-head,
+.mt-row {
+    display: grid;
+    gap: 8px;
+    padding: 5px 9px;
+    align-items: center;
+    font-size: 11.5px;
+}
+.mt-head {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg-faint);
+    border-bottom: 1px solid var(--line-soft);
+}
+.mt-row {
+    border-bottom: 1px solid var(--line-soft);
+    color: var(--fg-muted);
+}
+.mt-row:last-child {
+    border-bottom: 0;
+}
+.mt-row.clickable {
+    cursor: pointer;
+}
+.mt-row.clickable:hover {
+    background: var(--bg-hover);
+    color: var(--fg);
+}
+
+.keylist {
+    display: flex;
+    flex-direction: column;
+}
+.keyrow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 9px;
+    border-bottom: 1px solid var(--line-soft);
+}
+.keyname {
+    background: none;
+    border: 0;
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 12px;
+    text-align: left;
+    padding: 0;
+}
+.keyval {
+    flex: 1 0 100%;
+    margin: 4px 0 2px;
+    padding: 8px;
+    background: var(--bg-sunk);
+    border: 1px solid var(--line-soft);
+    font-size: 11.5px;
+    max-height: 320px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: var(--fg-muted);
+}
+
+.evlist {
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+}
+.evlist.compact {
+    max-height: 340px;
+}
+.ev {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 5px 9px;
+    border-bottom: 1px solid var(--line-soft);
+    font-size: 11.5px;
+    color: var(--fg-muted);
+}
+.ev.warn {
+    box-shadow: inset 2px 0 0 var(--warn);
+}
+.ev-body {
+    flex: 1;
+    min-width: 0;
+    word-break: break-word;
+}
+.ev-meta {
+    flex: 0 0 auto;
+    font-size: 10.5px;
+}
+
+.yamltab {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+.yaml-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg-sunk);
+    flex: 0 0 auto;
+    font-size: 11.5px;
+}
+.yaml-bar kbd {
+    margin-left: 2px;
+}

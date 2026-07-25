@@ -1,0 +1,34 @@
+{
+    "name": "digg-web",
+    "private": true,
+    "type": "module",
+    "description": "Source for the digg serve browser UI. Built into src/web/bundle.ts, which is committed — running digg from source never needs this toolchain.",
+    "scripts": {
+        "dev": "vite",
+        "build": "vite build && bun run scripts/embed.ts",
+        "typecheck": "tsc --noEmit"
+    },
+    "dependencies": {
+        "@codemirror/commands": "^6.8.1",
+        "@codemirror/lang-yaml": "^6.1.2",
+        "@codemirror/language": "^6.11.0",
+        "@codemirror/search": "^6.5.10",
+        "@codemirror/state": "^6.5.2",
+        "@codemirror/view": "^6.36.5",
+        "@lezer/highlight": "^1.2.3",
+        "@xterm/addon-fit": "^0.10.0",
+        "@xterm/addon-search": "^0.15.0",
+        "@xterm/xterm": "^5.5.0",
+        "nuqs": "^2.9.2",
+        "react": "^19.1.0",
+        "react-dom": "^19.1.0"
+    },
+    "devDependencies": {
+        "@types/react": "^19.1.0",
+        "@types/react-dom": "^19.1.0",
+        "@vitejs/plugin-react": "^4.4.1",
+        "typescript": "^5.8.0",
+        "vite": "^6.3.0",
+        "vite-plugin-singlefile": "^2.2.0"
+    }
+}

@@ -1,0 +1,91 @@
+.logs {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    background: var(--bg-sunk);
+}
+
+.logs-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    background: var(--bg-elev);
+    border-bottom: 1px solid var(--line);
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+}
+.logs-status {
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+}
+.logs-search {
+    width: 190px;
+    height: 24px;
+}
+.select.sm {
+    height: 24px;
+    font-size: 11.5px;
+    padding: 0 20px 0 6px;
+}
+
+.logs-body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 6px 0 12px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    line-height: 1.5;
+}
+.logline {
+    padding: 0 12px;
+    white-space: pre;
+    color: var(--fg-muted);
+}
+.logs-body.wrap .logline {
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.logline:hover {
+    background: var(--bg-hover);
+}
+.logline.error {
+    color: var(--bad);
+}
+.logline.warn {
+    color: var(--warn);
+}
+.logline.info {
+    color: var(--fg);
+}
+.logline.debug {
+    color: var(--fg-faint);
+}
+.loghit {
+    background: var(--warn-soft);
+    color: var(--warn);
+    padding: 0 1px;
+}
+
+.logs-empty {
+    padding: 20px 12px;
+    font-family: var(--sans);
+    font-size: 12.5px;
+}
+
+.logs-jump {
+    position: absolute;
+    right: 16px;
+    bottom: 14px;
+    padding: 5px 10px;
+    background: var(--accent);
+    color: var(--on-accent);
+    border: 0;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 550;
+}

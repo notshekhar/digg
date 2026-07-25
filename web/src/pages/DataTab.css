@@ -1,0 +1,117 @@
+.datatab {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
+.data-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg-sunk);
+    flex: 0 0 auto;
+    font-size: 11.5px;
+}
+
+.data-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+    max-width: 1180px;
+    margin: 0 auto;
+}
+
+.data-row {
+    border: 1px solid var(--line);
+    background: var(--bg-elev);
+}
+/* An edited key is marked on the row, not just in a badge — you should be able
+   to see what a save is about to touch by glancing down the list. */
+.data-row.changed {
+    border-color: var(--accent-dim);
+    box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.data-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--line-soft);
+    min-width: 0;
+}
+
+.data-key {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: none;
+    border: 0;
+    padding: 0;
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 12.5px;
+    min-width: 0;
+    text-align: left;
+}
+.data-key:disabled {
+    color: var(--fg-muted);
+    cursor: default;
+}
+.data-key .caret {
+    display: inline-flex;
+    transition: transform 0.12s ease;
+    flex: 0 0 auto;
+}
+.data-key .caret.open {
+    transform: rotate(90deg);
+}
+.data-head .size {
+    font-size: 10.5px;
+}
+
+.data-preview,
+.data-binary {
+    padding: 6px 9px 7px;
+    font-size: 11.5px;
+    color: var(--fg-muted);
+    white-space: pre;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.data-value {
+    display: block;
+    width: 100%;
+    padding: 8px 9px;
+    background: var(--bg-sunk);
+    border: 0;
+    border-top: 1px solid var(--line-soft);
+    color: var(--fg);
+    font-size: 12px;
+    line-height: 1.55;
+    resize: vertical;
+    outline: none;
+    white-space: pre;
+    overflow-wrap: normal;
+    overflow-x: auto;
+}
+.data-value:focus {
+    background: var(--bg);
+}
+.data-value:disabled {
+    opacity: 0.6;
+}
+
+.field-err {
+    font-size: 11.5px;
+    color: var(--bad);
+}

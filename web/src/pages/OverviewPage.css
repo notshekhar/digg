@@ -1,0 +1,153 @@
+.overview-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.stat-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 10px;
+}
+
+.grid-2 {
+    display: grid;
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    gap: 12px;
+}
+@media (max-width: 900px) {
+    .grid-2 {
+        grid-template-columns: 1fr;
+    }
+}
+
+.capacity {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+.legend {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+}
+.legend-mark {
+    display: inline-block;
+    width: 2px;
+    height: 10px;
+    background: var(--fg-faint);
+}
+
+.workloads {
+    display: flex;
+    flex-direction: column;
+}
+.workload {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 4px;
+    background: none;
+    border: 0;
+    border-bottom: 1px solid var(--line-soft);
+    color: var(--fg-muted);
+    cursor: pointer;
+    font-size: 12.5px;
+    text-align: left;
+}
+.workload:last-child {
+    border-bottom: 0;
+}
+.workload:hover {
+    color: var(--fg);
+    background: var(--bg-hover);
+}
+.wl-name {
+    text-transform: capitalize;
+}
+
+.rowlist {
+    display: flex;
+    flex-direction: column;
+    max-height: 340px;
+    overflow-y: auto;
+}
+.rowitem {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    padding: 5px 10px;
+    background: none;
+    border: 0;
+    border-bottom: 1px solid var(--line-soft);
+    color: var(--fg-muted);
+    cursor: pointer;
+    text-align: left;
+    font-size: 12px;
+    min-width: 0;
+}
+.rowitem.static {
+    cursor: default;
+}
+.rowitem:not(.static):hover {
+    background: var(--bg-hover);
+    color: var(--fg);
+}
+.rowitem .name {
+    flex: 0 1 auto;
+    max-width: 40%;
+    color: var(--fg);
+}
+.rowitem .msg {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.rowitem .when {
+    flex: 0 0 auto;
+    font-size: 11px;
+}
+
+/* Cards separate with their own hairlines rather than a 1px grid gap over a
+   coloured background — with one node, a gap-based grid paints the whole empty
+   remainder of the row in line colour. */
+.nodecards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    background: var(--bg-elev);
+}
+.nodecard {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    padding: 11px 12px;
+    background: var(--bg-elev);
+    border: 0;
+    border-right: 1px solid var(--line-soft);
+    border-bottom: 1px solid var(--line-soft);
+    color: inherit;
+    cursor: pointer;
+    text-align: left;
+    min-width: 0;
+}
+.nodecard:hover {
+    background: var(--bg-hover);
+}
+.nodecard-head {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+}
+.nodecard-head .name {
+    font-size: 12.5px;
+    font-weight: 500;
+}
+.nodecard-meta {
+    font-size: 11px;
+}

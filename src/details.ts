@@ -1,7 +1,8 @@
 // Per-kind detail "models": the summary key/values and the one navigable
-// section a resource's dashboard shows. DetailView (views/detail-view.ts) is the
-// generic executor — it loads section data + events and renders. This file is
-// the per-kind knowledge, so every kind gets a real page instead of a YAML dump.
+// section a resource's page shows. src/web/api.ts is the generic executor — it
+// resolves the section against the cluster and ships it to the browser. This
+// file holds the per-kind knowledge, so every kind gets a real page rather than
+// a YAML dump.
 
 import type { K8sObject, PodMetrics } from "./kubectl.ts";
 import {
@@ -89,8 +90,26 @@ function podSummary(obj: K8sObject, top: Map<string, PodMetrics>): [string, stri
         ["Status", dash(status?.phase)],
         ["QoS", dash(status?.qosClass)],
         ["CPU / Mem", metrics ? `${metrics.cpu} / ${metrics.memory}` : "—"],
+        // Declared container ports. The port-forward dialog reads this row so
+        // it can offer the right ports instead of guessing 80.
+        ["Ports", dash(podPorts(obj))],
         ["Age", age(obj)],
     ];
+}
+
+/** "http:8080/TCP, 9090/TCP" across every container in the pod. */
+function podPorts(obj: K8sObject): string {
+    const containers = ((obj.spec as { containers?: unknown[] })?.containers ?? []) as {
+        ports?: { name?: string; containerPort?: number; protocol?: string }[];
+    }[];
+    const out: string[] = [];
+    for (const c of containers) {
+        for (const p of c.ports ?? []) {
+            if (!p.containerPort) continue;
+            out.push(`${p.name ? `${p.name}:` : ""}${p.containerPort}/${p.protocol ?? "TCP"}`);
+        }
+    }
+    return out.join(", ");
 }
 
 function serviceModel(obj: K8sObject): DetailModel {
@@ -171,14 +190,36 @@ function secretSummary(obj: K8sObject): [string, string][] {
 }
 
 function ingressModel(obj: K8sObject): DetailModel {
-    const spec = obj.spec as { ingressClassName?: string };
+    const spec = obj.spec as {
+        ingressClassName?: string;
+        tls?: { hosts?: string[]; secretName?: string }[];
+        defaultBackend?: { service?: { name?: string; port?: { number?: number; name?: string } } };
+        rules?: unknown[];
+    };
+    const lb = (obj.status as { loadBalancer?: { ingress?: { ip?: string; hostname?: string }[] } })?.loadBalancer
+        ?.ingress;
+    const address = lb?.map((i) => i.ip ?? i.hostname ?? "").filter(Boolean).join(", ") ?? "";
+    const tls = (spec?.tls ?? [])
+        .map((t) => `${t.secretName ?? "?"} → ${(t.hosts ?? ["*"]).join(", ")}`)
+        .join("; ");
+    const fallback = spec?.defaultBackend?.service;
+
     return {
         summary: [
             ["Namespace", dash(obj.metadata?.namespace)],
             ["Class", dash(spec?.ingressClassName)],
+            // An Ingress with no address is an Ingress nothing is serving —
+            // usually a missing controller, and the first thing to check.
+            ["Address", address || "<pending>"],
+            ["TLS", tls || "none"],
+            [
+                "Default backend",
+                fallback ? `${fallback.name}:${fallback.port?.number ?? fallback.port?.name ?? ""}` : "—",
+            ],
+            ["Rules", String((spec?.rules ?? []).length)],
             ["Age", age(obj)],
         ],
-        section: { type: "ingressRules", title: "Rules" },
+        section: { type: "ingressRules", title: "Routing" },
     };
 }
 

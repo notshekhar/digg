@@ -1,23 +1,25 @@
 {
     "name": "digg",
-    "version": "0.3.5",
-    "description": "digg — a fast Kubernetes TUI in your terminal.",
+    "version": "1.0.0",
+    "description": "digg \u2014 a Kubernetes cockpit in your browser, driven by your local kubectl.",
     "type": "module",
     "license": "MIT",
     "bin": {
         "digg": "./src/cli.ts"
     },
     "files": [
-        "src"
+        "src",
+        "examples"
     ],
     "scripts": {
         "start": "bun ./src/cli.ts",
-        "build": "bun build-bin.ts"
+        "build": "bun build-bin.ts",
+        "build:web": "cd web && bun install && bun run build",
+        "test": "bun test",
+        "typecheck": "tsc --noEmit"
     },
     "dependencies": {
-        "@earendil-works/pi-tui": "^0.79.4",
         "@types/configstore": "^6.0.2",
-        "chalk": "^5.5.0",
         "configstore": "^8.0.0",
         "yaml": "^2.9.0"
     },

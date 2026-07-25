@@ -1,0 +1,152 @@
+/*
+ * Grid styling. Row height here MUST match ROW_H in DataGrid.tsx — the
+ * virtualiser computes offsets from that constant, so a change in one place
+ * without the other makes rows drift under the scrollbar.
+ */
+
+.grid {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    flex: 1;
+    outline: none;
+}
+
+.grid-head,
+.grid-row {
+    display: grid;
+    align-items: center;
+    column-gap: 0;
+}
+
+.grid-head {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    height: 28px;
+    background: var(--bg-sunk);
+    border-bottom: 1px solid var(--line);
+    flex: 0 0 auto;
+}
+
+.grid-cell {
+    padding: 0 8px;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+}
+.grid-cell.check {
+    padding: 0;
+    justify-content: center;
+}
+.grid-cell.check input {
+    accent-color: var(--accent);
+    width: 12px;
+    height: 12px;
+    cursor: pointer;
+}
+
+.grid-cell.head {
+    background: none;
+    border: 0;
+    border-right: 1px solid transparent;
+    color: var(--fg-faint);
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    cursor: pointer;
+    height: 100%;
+    text-align: left;
+}
+.grid-cell.head:hover {
+    color: var(--fg);
+    background: var(--bg-hover);
+}
+.grid-cell.head.sorted {
+    color: var(--accent);
+}
+.sort {
+    display: inline-flex;
+    transform: rotate(90deg);
+}
+.sort.desc {
+    transform: rotate(-90deg);
+}
+
+.grid-body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    overflow-anchor: none; /* live rows must not yank the scroll position */
+}
+
+.grid-row {
+    border-bottom: 1px solid var(--line-soft);
+    cursor: pointer;
+    color: var(--fg-muted);
+}
+.grid-row:hover {
+    background: var(--bg-hover);
+    color: var(--fg);
+}
+.grid-row.selected {
+    background: var(--accent-soft);
+    color: var(--fg);
+}
+.grid-row.cursor {
+    box-shadow: inset 2px 0 0 var(--accent);
+}
+.grid-row.cursor .grid-cell.name {
+    color: var(--fg);
+}
+.grid-cell.name {
+    color: var(--fg);
+    font-weight: 450;
+}
+
+/* Status colour lands on the cell, never on the whole row: a row painted red
+   for one bad column hides the other nine. */
+.t-ok {
+    color: var(--ok);
+}
+.t-warn {
+    color: var(--warn);
+}
+.t-bad {
+    color: var(--bad);
+}
+
+.grid-empty {
+    padding: 40px 20px;
+    text-align: center;
+    color: var(--fg-faint);
+    font-size: 13px;
+}
+
+/* Context menu shares .menu from ui.css but is positioned absolutely. */
+.menu.ctx {
+    position: fixed;
+    z-index: var(--z-palette);
+}
+
+.tickbox {
+    width: 13px;
+    display: inline-flex;
+    justify-content: center;
+    color: var(--accent);
+}
+
+/* Bulk-action bar that appears when rows are selected. */
+.bulkbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--accent-soft);
+    border-bottom: 1px solid var(--accent-dim);
+    flex: 0 0 auto;
+    font-size: 12.5px;
+}

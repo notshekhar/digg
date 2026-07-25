@@ -25,6 +25,29 @@ export function decodeSecretValue(b64: string): string {
     return text ?? `(binary, base64)\n${b64}`;
 }
 
+export interface DataEntry {
+    text: string;
+    /** True when the bytes are not clean UTF-8 — never offer to edit those. */
+    binary: boolean;
+    bytes: number;
+}
+
+/**
+ * Decode one entry for the data editor.
+ *
+ * Binary values are reported rather than mangled: editing a TLS key or a
+ * gzipped blob as text would silently corrupt it on save, so the editor shows
+ * the size and refuses to touch it.
+ */
+export function decodeEntry(value: string, encoded: boolean): DataEntry {
+    if (!encoded) return { text: value, binary: false, bytes: new TextEncoder().encode(value).length };
+    const raw = decodeBase64(value);
+    const text = asCleanText(raw);
+    return text === null
+        ? { text: "", binary: true, bytes: raw.length }
+        : { text, binary: false, bytes: raw.length };
+}
+
 /** True for valid UTF-8 with no control chars except tab and newline. */
 function asCleanText(bytes: Uint8Array): string | null {
     let text: string;

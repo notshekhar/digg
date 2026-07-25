@@ -1,0 +1,14 @@
+.termpane {
+    flex: 1;
+    min-height: 0;
+    /* 6 + 4 = PANE_PADDING_Y in TerminalPane.tsx. */
+    padding: 6px 4px 4px 8px;
+    background: var(--bg-sunk);
+    overflow: hidden;
+}
+.termpane .xterm {
+    height: 100%;
+}
+.termpane .xterm-viewport {
+    background: transparent !important;
+}

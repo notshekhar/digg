@@ -1,0 +1,65 @@
+# Sample Ingresses for poking at digg's routing view.
+#
+#   kubectl apply -f examples/ingress.yaml
+#
+# The last rule points at a service that does not exist, on purpose: digg's
+# Ingress page resolves every backend against the cluster and says so, which is
+# the whole reason that page exists. Nothing here needs an ingress controller —
+# without one the routes simply never get an address, which the page also says.
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+    name: demo-web
+    namespace: demo
+    annotations:
+        nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+    rules:
+        - host: demo.localtest.me
+          http:
+              paths:
+                  - path: /echo
+                    pathType: Prefix
+                    backend:
+                        service:
+                            name: echo-api
+                            port:
+                                number: 8080
+                  - path: /faker
+                    pathType: Prefix
+                    backend:
+                        service:
+                            name: faker-api
+                            port:
+                                number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+    name: demo-tls
+    namespace: demo
+spec:
+    tls:
+        - hosts:
+              - secure.localtest.me
+          secretName: demo-tls-cert
+    rules:
+        - host: secure.localtest.me
+          http:
+              paths:
+                  - path: /
+                    pathType: Prefix
+                    backend:
+                        service:
+                            name: echo-api
+                            port:
+                                number: 8080
+                  # Deliberately wrong: shows up as "no such service".
+                  - path: /missing
+                    pathType: Prefix
+                    backend:
+                        service:
+                            name: not-deployed-yet
+                            port:
+                                number: 8080

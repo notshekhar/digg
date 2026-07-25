@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import YAML from "yaml";
 import type { K8sObject, ResourceRef } from "./kubectl.ts";
-import { fromEditableYaml, toEditableYaml } from "./secret-yaml.ts";
+import { decodeEntry, fromEditableYaml, toEditableYaml } from "./secret-yaml.ts";
 
 const ref: ResourceRef = { kind: "Secret", name: "app-secret", namespace: "default", context: "test" };
 
@@ -114,5 +114,41 @@ describe("configmap round-trip", () => {
         const data = (YAML.parse(out) as K8sObject).data as Record<string, string>;
         expect(data["app.properties"]).toBe("a=1\nb=2\n");
         expect(data.greeting).toBe("hello");
+    });
+});
+
+describe("decodeEntry", () => {
+    const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
+
+    test("decodes clean text and reports its real size", () => {
+        const e = decodeEntry(b64("host: db\nport: 5432"), true);
+        expect(e.text).toBe("host: db\nport: 5432");
+        expect(e.binary).toBe(false);
+        expect(e.bytes).toBe(19);
+    });
+
+    test("unencoded values (ConfigMaps) pass straight through", () => {
+        const e = decodeEntry("LOG_LEVEL=debug", false);
+        expect(e.text).toBe("LOG_LEVEL=debug");
+        expect(e.binary).toBe(false);
+    });
+
+    test("binary is flagged, never mangled into text", () => {
+        // A NUL byte is not editable text; the editor must refuse it rather
+        // than round-trip it through a textarea and corrupt the value.
+        const e = decodeEntry(Buffer.from([0x00, 0xff, 0x10]).toString("base64"), true);
+        expect(e.binary).toBe(true);
+        expect(e.text).toBe("");
+        expect(e.bytes).toBe(3);
+    });
+
+    test("multi-byte UTF-8 survives", () => {
+        const e = decodeEntry(b64("café ☕ नमस्ते"), true);
+        expect(e.text).toBe("café ☕ नमस्ते");
+        expect(e.binary).toBe(false);
+    });
+
+    test("an empty value is text, not binary", () => {
+        expect(decodeEntry("", true)).toEqual({ text: "", binary: false, bytes: 0 });
     });
 });

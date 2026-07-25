@@ -5,6 +5,7 @@
 // Output: dist/bin/<target>/digg (+ package.json) and dist/bin/digg-<target>.tar.gz
 
 import { readFileSync, mkdirSync, existsSync, rmSync, copyFileSync } from "node:fs";
+import { bundleHash, webSourceHash } from "./scripts/web-hash.ts";
 import { join } from "node:path";
 import { $ } from "bun";
 
@@ -63,6 +64,24 @@ mkdirSync(stageDir, { recursive: true });
 // name (digg-<os>-x64.tar.gz) — only the bun --compile target gains the suffix.
 const compileTarget =
     shortTarget.endsWith("x64") && !target.includes("windows") ? `${target}-baseline` : target;
+
+// The browser UI is a build artefact committed as src/web/bundle.ts. Compare
+// its recorded source fingerprint against the working tree — content, not
+// timestamps, so a fresh git checkout never trips this.
+const bundlePath = join(import.meta.dir, "src", "web", "bundle.ts");
+if (!existsSync(bundlePath)) {
+    console.error("✗ src/web/bundle.ts is missing. Run: bun run build:web");
+    process.exit(1);
+}
+const wantHash = webSourceHash(import.meta.dir);
+if (wantHash) {
+    const haveHash = bundleHash(bundlePath);
+    if (haveHash !== wantHash) {
+        console.error(`✗ src/web/bundle.ts is stale (bundle ${haveHash || "unhashed"} vs source ${wantHash}).`);
+        console.error("  Run: bun run build:web");
+        process.exit(1);
+    }
+}
 
 console.log(`▶ building ${binPath} (v${pkg.version}) [target ${compileTarget}]`);
 

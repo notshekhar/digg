@@ -1,0 +1,41 @@
+.cm-host {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    background: var(--bg);
+}
+.cm-host .cm-editor {
+    height: 100%;
+}
+.cm-host .cm-editor.cm-focused {
+    outline: none;
+}
+
+.textpane {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+.textpane-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--line);
+    flex: 0 0 auto;
+}
+.textpane-bar .search {
+    width: 260px;
+}
+.textpane-body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    margin: 0;
+    padding: 10px 12px;
+    font-size: 12px;
+    line-height: 1.55;
+    white-space: pre;
+    color: var(--fg-muted);
+}
