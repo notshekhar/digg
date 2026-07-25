@@ -8,7 +8,10 @@ import Configstore from "configstore";
 // instead — see web/src/lib/query.ts.
 
 interface ContextPrefs {
+    /** Legacy single selection, still read so an old settings.json still works. */
     namespace?: string | null; // null → all namespaces
+    /** Every selected namespace. Empty means all of them, as `kubectl -A` does. */
+    namespaces?: string[];
     kind?: string;
 }
 
@@ -37,7 +40,12 @@ export function setLastContext(context: string): void {
 
 export function getContextPrefs(context: string): ContextPrefs {
     const all = (store.get("contexts") as Record<string, ContextPrefs>) ?? {};
-    return all[context] ?? {};
+    const prefs = all[context] ?? {};
+    // A file written before multi-select existed only knows one namespace.
+    if (!prefs.namespaces && typeof prefs.namespace === "string") {
+        return { ...prefs, namespaces: [prefs.namespace] };
+    }
+    return prefs;
 }
 
 export function setContextPrefs(context: string, prefs: ContextPrefs): void {

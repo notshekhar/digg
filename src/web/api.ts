@@ -171,6 +171,7 @@ export async function handleApi(req: Request): Promise<Response | null> {
                 context,
                 namespaces,
                 namespace: prefs.namespace === undefined ? null : prefs.namespace,
+                selectedNamespaces: (prefs.namespaces ?? []).filter((n) => namespaces.includes(n)),
                 kind: kindName,
                 kinds,
                 catalog: buildCatalog(discovered),
@@ -193,9 +194,15 @@ export async function handleApi(req: Request): Promise<Response | null> {
             const context = typeof body.context === "string" ? body.context : undefined;
             if (context) {
                 setLastContext(context);
-                const patch: { namespace?: string | null; kind?: string } = {};
+                const patch: { namespace?: string | null; namespaces?: string[]; kind?: string } = {};
                 if ("namespace" in body) {
                     patch.namespace = body.namespace === null || body.namespace === "" ? null : String(body.namespace);
+                }
+                if (Array.isArray(body.namespaces)) {
+                    const list = body.namespaces.filter((n): n is string => typeof n === "string");
+                    patch.namespaces = list;
+                    // Keep the single-value field in step for anything still reading it.
+                    patch.namespace = list.length === 1 ? list[0]! : null;
                 }
                 if (typeof body.kind === "string") patch.kind = body.kind;
                 if (Object.keys(patch).length) setContextPrefs(context, patch);
@@ -213,6 +220,8 @@ export async function handleApi(req: Request): Promise<Response | null> {
             return json({ ok: true, ui: setUiState(body) });
         }
 
+        // Switching cluster asks for this; the saved selection rides along so
+        // the new cluster opens where it was left, not at "all namespaces".
         if (pathname === "/api/namespaces" && req.method === "GET") {
             const context = url.searchParams.get("context")?.trim();
             if (!context) return bad("context required");
@@ -222,7 +231,11 @@ export async function handleApi(req: Request): Promise<Response | null> {
             } catch {
                 namespaces = [];
             }
-            return json({ namespaces });
+            const prefs = getContextPrefs(context);
+            // Only offer back what this cluster still has: a namespace deleted
+            // since the last visit must not come back as a filter for nothing.
+            const selected = (prefs.namespaces ?? []).filter((n) => namespaces.includes(n));
+            return json({ namespaces, selected, kind: prefs.kind ?? null });
         }
 
         if (pathname === "/api/kinds" && req.method === "GET") {

@@ -76,3 +76,45 @@
     text-align: center;
     font-size: 13px;
 }
+
+/* --------------------------------------------------- cluster / namespace */
+
+/* Narrower than ⌘K: one question, short answers. */
+.picker-palette {
+    width: min(460px, 100%);
+}
+/* A picked row stays legible when the cursor is elsewhere — in a multi-select
+   the selection is the state, not a hover. */
+.palette-item.picked {
+    color: var(--fg);
+}
+.palette-item.picked .pi-icon {
+    color: var(--accent);
+}
+/* Placeholder in the tick column, so labels line up whatever is selected. */
+.pi-dot {
+    display: block;
+    width: 13px;
+    height: 13px;
+    border-left: 1px solid var(--line-strong);
+    opacity: 0.5;
+}
+.picker-count {
+    padding: 1px 6px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 11.5px;
+}
+.picker-hint {
+    font-size: 11.5px;
+    max-width: 45%;
+}
+.palette-foot {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 12px;
+    border-top: 1px solid var(--line);
+    font-size: 11.5px;
+    flex: 0 0 auto;
+}

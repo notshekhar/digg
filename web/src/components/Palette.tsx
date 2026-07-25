@@ -161,7 +161,7 @@ export function Palette({
                 icon: <Icon.Layers size={13} />,
                 run: () => {
                     void setSelectedNs([ns]);
-                    void api.prefs({ context, namespace: ns }).catch(() => {});
+                    void api.prefs({ context, namespaces: [ns] }).catch(() => {});
                     refreshNow();
                 },
             });

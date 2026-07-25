@@ -1,5 +1,35 @@
 # Changelog
 
+## v1.4.0
+
+- **Fixed: switching cluster forgot where you were in it.** Every switch
+  cleared the namespace selection and never asked what that cluster had been
+  left on, so going from staging to prod and back meant re-picking your
+  namespaces every time. Each context now remembers its own selection —
+  **all** of it, not just the one namespace the old code could store — and gets
+  it back on the way in, in the same round trip that fetches the namespace
+  list. Namespace names are cluster-local, so the selection is cleared on the
+  way out rather than carried across: "payments" in staging is not "payments"
+  in prod, and a filter that silently matches nothing is worse than none.
+  A namespace deleted since your last visit is quietly dropped.
+- **Cluster and namespace pickers, in the ⌘K box.** Both were dropdowns, which
+  is the wrong control once a cluster has eighty namespaces: you cannot type at
+  a menu without reaching for the mouse first. They are now the same centred,
+  search-first palette ⌘K uses — `⌘⌥K` for clusters, `⌘⌥N` for namespaces, or
+  click either control in the top bar.
+- **Namespaces multi-select the way a set of checkboxes should.** Click a
+  namespace to add it, click it again to drop it, and the box stays open the
+  whole time; enter and space do the same from the keyboard, esc closes. There
+  is no apply step because every change applies as you make it — the table
+  behind the box is the preview. Selected namespaces float to the top, but only
+  when the search changes, never mid-click: a list that re-sorts as you toggle
+  slides the next row out from under the pointer.
+- **⌘ chords with option in them actually fire now.** The keymap matched on the
+  character the browser reported, and on macOS option composes one — ⌘⌥N
+  arrives as "˜", so a chord written "mod+alt+n" could never match. Chords are
+  read off the physical key instead. `⌘⌥R` (refresh) has presumably been dead
+  on macOS since it was added.
+
 ## v1.3.0
 
 **digg stops paying for a process per question.** Every read used to be its own

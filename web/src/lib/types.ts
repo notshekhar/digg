@@ -24,7 +24,10 @@ export interface Boot {
     contexts: string[];
     context: string;
     namespaces: string[];
+    /** Legacy single selection; `selectedNamespaces` is the real answer. */
     namespace: string | null;
+    /** What was selected here last time, minus anything since deleted. */
+    selectedNamespaces: string[];
     kind: string;
     kinds: KindMeta[];
     catalog: CatalogGroup[];

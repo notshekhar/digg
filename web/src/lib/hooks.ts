@@ -107,7 +107,11 @@ export function useHotkeys(map: Record<string, Handler>, enabled = true): void {
             if (mod) parts.push("mod");
             if (e.altKey) parts.push("alt");
             if (e.shiftKey && e.key.length > 1) parts.push("shift");
-            parts.push(e.key.length === 1 ? e.key.toLowerCase() : e.key.toLowerCase());
+            // Letters come from `code`, not `key`: on macOS option composes a
+            // character, so ⌘⌥n arrives as "˜" and a chord written "mod+alt+n"
+            // could never match. Everything else (/, Escape) keeps its key.
+            const letter = /^Key([A-Z])$/.exec(e.code)?.[1];
+            parts.push(letter ? letter.toLowerCase() : e.key.toLowerCase());
 
             const fn = mapRef.current[parts.join("+")];
             if (!fn) return;

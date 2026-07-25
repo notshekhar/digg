@@ -87,7 +87,8 @@ export function streamUrl(path: string, params: Params = {}): string {
 export const api = {
     boot: () => req<Boot>("/api/boot"),
 
-    namespaces: (context: string) => req<{ namespaces: string[] }>("/api/namespaces", { context }),
+    namespaces: (context: string) =>
+        req<{ namespaces: string[]; selected: string[]; kind: string | null }>("/api/namespaces", { context }),
 
     catalog: (context: string) => req<{ catalog: Boot["catalog"] }>("/api/catalog", { context }),
 

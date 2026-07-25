@@ -8,18 +8,23 @@
  */
 
 import { Icon } from "./icons.tsx";
-import { MultiSelect, Select } from "./ui.tsx";
 import { api } from "../lib/api.ts";
-import { refreshNow, setDock, setState, toast, useApp } from "../lib/store.ts";
+import { refreshNow, setDock, setState, useApp } from "../lib/store.ts";
 import { useNamespaces } from "../lib/query.ts";
 import { useLiveStatus } from "../lib/live-data.ts";
 import "./TopBar.css";
 
-export function TopBar({ onPalette }: { onPalette: () => void }) {
-    const contexts = useApp((s) => s.contexts);
+export function TopBar({
+    onPalette,
+    onClusters,
+    onNamespaces,
+}: {
+    onPalette: () => void;
+    onClusters: () => void;
+    onNamespaces: () => void;
+}) {
     const context = useApp((s) => s.context);
-    const namespaces = useApp((s) => s.namespaces);
-    const [selectedNs, setSelectedNs] = useNamespaces();
+    const [selectedNs] = useNamespaces();
     const live = useApp((s) => s.live);
     const liveMode = useLiveStatus();
     const refreshing = useApp((s) => s.refreshing);
@@ -30,26 +35,8 @@ export function TopBar({ onPalette }: { onPalette: () => void }) {
     const forwards = useApp((s) => s.forwards);
     const activeForwards = forwards.filter((f) => f.status === "active" || f.status === "starting").length;
 
-    const switchContext = async (next: string) => {
-        setState({ context: next, ready: false, catalog: [] });
-        void setSelectedNs(null);
-        try {
-            const [{ namespaces: ns }, { catalog }] = await Promise.all([api.namespaces(next), api.catalog(next)]);
-            setState({ namespaces: ns, catalog, ready: true });
-            void api.prefs({ context: next }).catch(() => {});
-            refreshNow();
-        } catch (err) {
-            setState({ ready: true, error: err instanceof Error ? err.message : String(err) });
-            toast("bad", "Could not switch context", err instanceof Error ? err.message : String(err));
-        }
-    };
-
-    const setNamespaces = (next: string[]) => {
-        // null clears the param instead of leaving ?ns= behind.
-        void setSelectedNs(next.length ? next : null);
-        void api.prefs({ context, namespace: next.length === 1 ? next[0] : null }).catch(() => {});
-        refreshNow();
-    };
+    const nsSummary =
+        selectedNs.length === 0 ? "All namespaces" : selectedNs.length === 1 ? selectedNs[0]! : `${selectedNs.length} selected`;
 
     const toggleTheme = () => {
         const next = theme === "dark" ? "light" : "dark";
@@ -60,20 +47,21 @@ export function TopBar({ onPalette }: { onPalette: () => void }) {
 
     return (
         <header className="topbar">
-            <Select
-                label="Cluster"
-                icon={<Icon.Cluster size={13} />}
-                options={contexts}
-                value={context}
-                onChange={(v) => void switchContext(v)}
-            />
-            <MultiSelect
-                label="Namespace"
-                icon={<Icon.Layers size={13} />}
-                options={namespaces}
-                selected={selectedNs}
-                onChange={setNamespaces}
-            />
+            {/* Both open the ⌘K-shaped picker rather than a dropdown: on a
+                cluster with eighty namespaces, scrolling a menu is the whole
+                interaction, and searching is one keystroke. */}
+            <button className="picker-trigger" type="button" onClick={onClusters} title="Switch cluster (⌘⌥K)">
+                <Icon.Cluster size={13} />
+                <span className="picker-label eyebrow">Cluster</span>
+                <span className="picker-value truncate">{context || "—"}</span>
+                <kbd>⌘⌥K</kbd>
+            </button>
+            <button className="picker-trigger" type="button" onClick={onNamespaces} title="Choose namespaces (⌘⌥N)">
+                <Icon.Layers size={13} />
+                <span className="picker-label eyebrow">Namespace</span>
+                <span className="picker-value truncate">{nsSummary}</span>
+                <kbd>⌘⌥N</kbd>
+            </button>
 
             <button className="palette-btn" type="button" onClick={onPalette} title="Search everything">
                 <Icon.Search size={13} />

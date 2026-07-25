@@ -82,3 +82,10 @@
         transform: rotate(360deg);
     }
 }
+
+/* The scope controls are palette triggers now; the chord sits where the
+   dropdown caret used to, so the control is the same width either way. */
+.picker-trigger kbd {
+    flex: 0 0 auto;
+    opacity: 0.75;
+}

@@ -1,11 +1,14 @@
 /**
  * The component kit. Everything digg draws is in here or in a page — there is
  * no third-party UI library, because a Kubernetes cockpit is mostly bespoke
- * density (27px rows, gauges that admit missing metrics, a dropdown that can
- * hold 400 namespaces) and a generic kit fights all three.
+ * density (27px rows, gauges that admit missing metrics, menus that carry their
+ * own destructive-action confirmation) and a generic kit fights all three.
+ *
+ * Cluster and namespace selection are NOT here — they outgrew a dropdown and
+ * live in Picker.tsx, which is the ⌘K palette wearing a different hat.
  */
 
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "./icons.tsx";
@@ -329,150 +332,9 @@ export function Confirm({
 
 // ── searchable multi-select (namespaces) ───────────────────────────────────
 
-export function MultiSelect({
-    label,
-    options,
-    selected,
-    onChange,
-    allLabel = "All namespaces",
-    icon,
-}: {
-    label: string;
-    options: string[];
-    selected: string[];
-    onChange: (next: string[]) => void;
-    allLabel?: string;
-    icon?: ReactNode;
-}) {
-    const [open, setOpen] = useState(false);
-    const [q, setQ] = useState("");
-    const ref = useClickOutside<HTMLDivElement>(() => setOpen(false));
-    const id = useId();
-    const shown = options.filter((o) => o.toLowerCase().includes(q.toLowerCase()));
-    const summary = selected.length === 0 ? allLabel : selected.length === 1 ? selected[0]! : `${selected.length} selected`;
-
-    return (
-        <div className="picker" ref={ref}>
-            <button
-                type="button"
-                className="picker-trigger"
-                aria-expanded={open}
-                aria-controls={id}
-                onClick={() => setOpen((o) => !o)}
-                title={`${label}: ${summary}`}
-            >
-                {icon}
-                <span className="picker-label eyebrow">{label}</span>
-                <span className="picker-value truncate">{summary}</span>
-                <Icon.ChevronDown size={12} />
-            </button>
-            {open && (
-                <div className="picker-pop" id={id}>
-                    <div className="search">
-                        <Icon.Search size={13} />
-                        <input autoFocus placeholder="Filter…" value={q} onChange={(e) => setQ(e.target.value)} />
-                    </div>
-                    <div className="picker-list">
-                        <button
-                            type="button"
-                            className={`picker-opt ${selected.length === 0 ? "on" : ""}`}
-                            onClick={() => {
-                                onChange([]);
-                                setOpen(false);
-                            }}
-                        >
-                            <span className="tick">{selected.length === 0 ? <Icon.Check size={12} /> : null}</span>
-                            <span className="spring">{allLabel}</span>
-                        </button>
-                        <div className="menu-sep" />
-                        {shown.map((o) => {
-                            const on = selected.includes(o);
-                            return (
-                                <button
-                                    key={o}
-                                    type="button"
-                                    className={`picker-opt ${on ? "on" : ""}`}
-                                    onClick={(e) => {
-                                        // Plain click selects just this one — the
-                                        // common case. mod-click accumulates.
-                                        if (e.metaKey || e.ctrlKey) {
-                                            onChange(on ? selected.filter((s) => s !== o) : [...selected, o]);
-                                        } else {
-                                            onChange([o]);
-                                            setOpen(false);
-                                        }
-                                    }}
-                                >
-                                    <span className="tick">{on ? <Icon.Check size={12} /> : null}</span>
-                                    <span className="spring truncate">{o}</span>
-                                </button>
-                            );
-                        })}
-                        {shown.length === 0 ? <div className="picker-empty">no match</div> : null}
-                    </div>
-                    <div className="picker-foot faint">⌘-click to select several</div>
-                </div>
-            )}
-        </div>
-    );
-}
 
 // ── single select (context) ────────────────────────────────────────────────
 
-export function Select({
-    label,
-    options,
-    value,
-    onChange,
-    icon,
-}: {
-    label: string;
-    options: string[];
-    value: string;
-    onChange: (v: string) => void;
-    icon?: ReactNode;
-}) {
-    const [open, setOpen] = useState(false);
-    const [q, setQ] = useState("");
-    const ref = useClickOutside<HTMLDivElement>(() => setOpen(false));
-    const shown = options.filter((o) => o.toLowerCase().includes(q.toLowerCase()));
-    return (
-        <div className="picker" ref={ref}>
-            <button type="button" className="picker-trigger" onClick={() => setOpen((o) => !o)} title={`${label}: ${value}`}>
-                {icon}
-                <span className="picker-label eyebrow">{label}</span>
-                <span className="picker-value truncate">{value || "—"}</span>
-                <Icon.ChevronDown size={12} />
-            </button>
-            {open && (
-                <div className="picker-pop">
-                    {options.length > 8 && (
-                        <div className="search">
-                            <Icon.Search size={13} />
-                            <input autoFocus placeholder="Filter…" value={q} onChange={(e) => setQ(e.target.value)} />
-                        </div>
-                    )}
-                    <div className="picker-list">
-                        {shown.map((o) => (
-                            <button
-                                key={o}
-                                type="button"
-                                className={`picker-opt ${o === value ? "on" : ""}`}
-                                onClick={() => {
-                                    onChange(o);
-                                    setOpen(false);
-                                }}
-                            >
-                                <span className="tick">{o === value ? <Icon.Check size={12} /> : null}</span>
-                                <span className="spring truncate">{o}</span>
-                            </button>
-                        ))}
-                    </div>
-                </div>
-            )}
-        </div>
-    );
-}
 
 // ── toasts ─────────────────────────────────────────────────────────────────
 

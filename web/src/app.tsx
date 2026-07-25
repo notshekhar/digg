@@ -10,6 +10,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Console } from "./components/Console.tsx";
 import { Palette } from "./components/Palette.tsx";
+import { Picker } from "./components/Picker.tsx";
+import { Icon } from "./components/icons.tsx";
 import { Rail } from "./components/Rail.tsx";
 import { TopBar } from "./components/TopBar.tsx";
 import { Modal, Toasts } from "./components/ui.tsx";
@@ -32,6 +34,7 @@ export function App() {
     const error = useApp((s) => s.error);
     const dockOpen = useApp((s) => s.dock.open);
     const [palette, setPalette] = useState(false);
+    const [picker, setPicker] = useState<"cluster" | "namespace" | null>(null);
     const [help, setHelp] = useState(false);
     const [selectedNs, setSelectedNs] = useNamespaces();
     const [, setTab] = useTab();
@@ -62,8 +65,8 @@ export function App() {
                 document.documentElement.dataset.theme = boot.prefs.theme;
                 // A URL that already names namespaces wins over the saved
                 // preference: a pasted link must open what it says.
-                if (nsRef.current.selectedNs.length === 0 && boot.namespace) {
-                    void nsRef.current.setSelectedNs([boot.namespace]);
+                if (nsRef.current.selectedNs.length === 0 && boot.selectedNamespaces.length > 0) {
+                    void nsRef.current.setSelectedNs(boot.selectedNamespaces);
                 }
             } catch (err) {
                 if (live) setState({ ready: true, error: err instanceof Error ? err.message : String(err) });
@@ -82,18 +85,32 @@ export function App() {
         [setTab],
     );
 
+    /**
+     * The only implementation — TopBar and the palette both call this one.
+     *
+     * A cluster you have used before opens where you left it: the namespaces
+     * you had selected there come back with the namespace list, in the same
+     * round trip. Clearing the selection first matters, because namespace names
+     * are cluster-local — "payments" in staging is not "payments" in prod, and
+     * carrying the old filter over would silently show you nothing.
+     */
     const switchContext = useCallback(async (next: string) => {
-        setState({ context: next, catalog: [] });
-        void setSelectedNs(null);
+        setState({ context: next, ready: false, catalog: [] });
+        void nsRef.current.setSelectedNs(null);
         try {
-            const [{ namespaces }, { catalog }] = await Promise.all([api.namespaces(next), api.catalog(next)]);
-            setState({ namespaces, catalog });
+            const [{ namespaces, selected }, { catalog }] = await Promise.all([
+                api.namespaces(next),
+                api.catalog(next),
+            ]);
+            setState({ namespaces, catalog, ready: true });
+            if (selected.length) void nsRef.current.setSelectedNs(selected);
             void api.prefs({ context: next }).catch(() => {});
             refreshNow();
         } catch (err) {
+            setState({ ready: true });
             toast("bad", "Could not switch cluster", err instanceof Error ? err.message : String(err));
         }
-    }, [setSelectedNs]);
+    }, []);
 
     // ── keymap ─────────────────────────────────────────────────────────────
     useHotkeys({
@@ -104,6 +121,8 @@ export function App() {
             input?.select();
         },
         "mod+j": () => setDock({ open: !dockOpen }),
+        "mod+alt+k": () => setPicker((p) => (p === "cluster" ? null : "cluster")),
+        "mod+alt+n": () => setPicker((p) => (p === "namespace" ? null : "namespace")),
         "mod+/": () => setHelp((h) => !h),
         // ⌘R is the browser's reload and stays that way; refresh gets the
         // option key so nothing familiar is stolen.
@@ -139,7 +158,11 @@ export function App() {
         <div className="app">
             <Rail route={route} />
             <div className="main">
-                <TopBar onPalette={() => setPalette(true)} />
+                <TopBar
+                    onPalette={() => setPalette(true)}
+                    onClusters={() => setPicker("cluster")}
+                    onNamespaces={() => setPicker("namespace")}
+                />
                 <div className="workspace">
                     <div className="content">
                         {route.page === "overview" ? (
@@ -169,10 +192,74 @@ export function App() {
                     onSwitchContext={(c) => void switchContext(c)}
                 />
             ) : null}
+            {picker ? (
+                <ScopePicker kind={picker} onClose={() => setPicker(null)} onSwitchContext={switchContext} />
+            ) : null}
             {help ? <HelpModal onClose={() => setHelp(false)} /> : null}
             <ActionDialogs />
             <Toasts />
         </div>
+    );
+}
+
+/**
+ * The cluster and namespace pickers, which are the same box asking two
+ * questions. Namespaces apply as they are toggled — see Picker.tsx for why
+ * there is no separate apply step — and are remembered per cluster, so the
+ * answer survives a switch and a reload.
+ */
+function ScopePicker({
+    kind,
+    onClose,
+    onSwitchContext,
+}: {
+    kind: "cluster" | "namespace";
+    onClose: () => void;
+    onSwitchContext: (context: string) => Promise<void> | void;
+}) {
+    const contexts = useApp((s) => s.contexts);
+    const context = useApp((s) => s.context);
+    const namespaces = useApp((s) => s.namespaces);
+    const cluster = useApp((s) => s.cluster);
+    const [selectedNs, setSelectedNs] = useNamespaces();
+
+    if (kind === "cluster") {
+        return (
+            <Picker
+                title="Switch cluster"
+                placeholder="Search clusters…"
+                icon={<Icon.Cluster size={15} />}
+                options={contexts.map((c) => ({
+                    value: c,
+                    hint: c === context ? (cluster?.server ?? "current") : undefined,
+                }))}
+                selected={context}
+                onClose={onClose}
+                onPick={(next) => {
+                    if (next !== context) void onSwitchContext(next);
+                }}
+                empty="no clusters in your kubeconfig"
+            />
+        );
+    }
+
+    return (
+        <Picker
+            multiple
+            title="Namespaces"
+            placeholder="Search namespaces…"
+            icon={<Icon.Layers size={15} />}
+            options={namespaces.map((n) => ({ value: n }))}
+            allLabel="All namespaces"
+            selected={selectedNs}
+            onClose={onClose}
+            onPick={(next) => {
+                void setSelectedNs(next.length ? next : null);
+                void api.prefs({ context, namespaces: next }).catch(() => {});
+                refreshNow();
+            }}
+            empty="this cluster has no namespaces you can see"
+        />
     );
 }
 
@@ -183,6 +270,8 @@ export function App() {
  */
 const KEYS: [string, string][] = [
     ["⌘K", "Command palette — kinds, namespaces, clusters, pods"],
+    ["⌘⌥K", "Switch cluster"],
+    ["⌘⌥N", "Choose namespaces"],
     ["⌘F", "Filter the current table"],
     ["⌘J", "Console — shells and port-forwards"],
     ["⌘S", "Apply the YAML you are editing"],
