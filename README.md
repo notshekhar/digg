@@ -13,10 +13,16 @@ your PATH.**
 
 ## Install
 
-Prebuilt binary:
+Prebuilt binary — macOS and Linux:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/notshekhar/digg/main/install.sh | bash
+```
+
+Windows:
+
+```powershell
+irm https://raw.githubusercontent.com/notshekhar/digg/main/install.ps1 | iex
 ```
 
 From source:
@@ -27,7 +33,8 @@ bun ./src/cli.ts        # run it
 bun build-bin.ts        # standalone binary in dist/bin/<target>/digg
 ```
 
-Update with `digg update`. Uninstall with `DIGG_UNINSTALL=1 curl -fsSL .../install.sh | bash`.
+Update with `digg update`. Uninstall with `DIGG_UNINSTALL=1 curl -fsSL .../install.sh | bash`,
+or `irm .../install.ps1 | iex` with `-Uninstall` on Windows.
 
 ## Usage
 

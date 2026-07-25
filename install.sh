@@ -30,6 +30,79 @@ err()  { printf "\033[31m%s\033[0m\n" "$*" >&2; }
 
 need_tool() { command -v "$1" >/dev/null 2>&1 || { err "Missing required tool: $1"; exit 1; }; }
 
+# ── Download progress bar ──────────────────────────────────────────────────
+# curl traces into a FIFO; content-length and `<= recv data` records drive a
+# ■■■･･･ 42% bar. TTY only — anything else falls back to plain curl. Same
+# implementation hehe, loop and markdown ship.
+unbuffered_sed() {
+  if echo | sed -u -e "" >/dev/null 2>&1; then
+    sed -nu "$@"
+  elif echo | sed -l -e "" >/dev/null 2>&1; then
+    sed -nl "$@"
+  else
+    local pad; pad="$(printf "\n%512s" "")"
+    sed -ne "s/$/\\${pad}/" "$@"
+  fi
+}
+
+PROGRESS_COLOR='\033[38;5;215m'
+PROGRESS_NC='\033[0m'
+
+print_progress() {
+  local bytes="$1" length="$2"
+  [ "$length" -gt 0 ] || return 0
+  local width=50
+  local percent=$(( bytes * 100 / length ))
+  [ "$percent" -gt 100 ] && percent=100
+  local on=$(( percent * width / 100 ))
+  local off=$(( width - on ))
+  local filled empty
+  filled=$(printf "%*s" "$on" ""); filled=${filled// /■}
+  empty=$(printf "%*s" "$off" ""); empty=${empty// /･}
+  printf "\r${PROGRESS_COLOR}%s%s %3d%%${PROGRESS_NC}" "$filled" "$empty" "$percent" >&4
+}
+
+download_with_progress() {
+  local url="$1" output="$2"
+  if [ -t 2 ]; then exec 4>&2; else exec 4>/dev/null; fi
+
+  local tracefile="${TMPDIR:-/tmp}/digg_install_$$.trace"
+  rm -f "$tracefile"
+  mkfifo "$tracefile" 2>/dev/null || return 1
+
+  printf "\033[?25l" >&4
+  trap "trap - RETURN; rm -f \"$tracefile\"; printf '\033[?25h' >&4; exec 4>&-" RETURN
+
+  ( curl -f --trace-ascii "$tracefile" -s -L -o "$output" "$url" ) &
+  local curl_pid=$!
+
+  unbuffered_sed \
+    -e 'y/ACDEGHLNORTV/acdeghlnortv/' \
+    -e '/^0000: content-length:/p' \
+    -e '/^<= recv data/p' \
+    "$tracefile" | \
+  {
+    local length=0 bytes=0
+    while IFS=" " read -r -a line; do
+      [ "${#line[@]}" -lt 2 ] && continue
+      local tag="${line[0]} ${line[1]}"
+      if [ "$tag" = "0000: content-length:" ]; then
+        # A redirect chain restarts the count; the asset response wins.
+        length="$(echo "${line[2]}" | tr -d '\r')"
+        bytes=0
+      elif [ "$tag" = "<= recv" ]; then
+        bytes=$(( bytes + ${line[3]} ))
+        [ "$length" -gt 0 ] && print_progress "$bytes" "$length"
+      fi
+    done
+  }
+
+  wait $curl_pid
+  local ret=$?
+  echo "" >&4
+  return $ret
+}
+
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
   elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
@@ -47,7 +120,7 @@ detect_target() {
   case "$(uname -s)" in
     Darwin) os="darwin" ;;
     Linux)  os="linux" ;;
-    MINGW*|MSYS*|CYGWIN*) err "Windows: download the binary from the Releases page."; exit 1 ;;
+    MINGW*|MSYS*|CYGWIN*) err "Windows: use install.ps1 — irm https://raw.githubusercontent.com/${REPO_SLUG}/main/install.ps1 | iex"; exit 1 ;;
     *) err "unsupported OS: $(uname -s)"; exit 1 ;;
   esac
   case "$(uname -m)" in
@@ -123,7 +196,10 @@ main() {
   tar="$scratch/digg.tar.gz"
 
   bold "▶ Downloading ${url##*/}"
-  curl -fL --progress-bar "$url" -o "$tar" || { err "download failed: $url"; exit 1; }
+  # The bar needs a FIFO and a terminal; where either is missing, plain curl.
+  download_with_progress "$url" "$tar" \
+    || curl -fL --progress-bar "$url" -o "$tar" \
+    || { err "download failed: $url"; exit 1; }
 
   if curl -fsSL "${url}.sha256" -o "$scratch/sum" 2>/dev/null && [ -s "$scratch/sum" ]; then
     local expected got

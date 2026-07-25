@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.4.2
+
+- **The download shows the ■■■･･･ bar** that hehe, loop and markdown install
+  with, instead of curl's own line. It is the same implementation: curl traces
+  into a FIFO, and content-length plus `<= recv data` records drive the bar. A
+  terminal gets it; a pipe or a host without FIFOs falls back to plain curl and
+  installs exactly as before.
+- **A Windows installer.** `irm https://raw.githubusercontent.com/notshekhar/digg/main/install.ps1 | iex`
+  — streamed with the same bar (HttpClient with `ResponseHeadersRead`, so it
+  moves before the body lands), checksum verified, installed to
+  `%LOCALAPPDATA%\digg` and added to your user PATH. It says so plainly if
+  kubectl is not on PATH, since digg cannot reach a cluster without it. The sh
+  installer now points Windows users here rather than at the Releases page.
+
 ## v1.4.1
 
 - **Fixed: picking a namespace with the mouse killed the arrow keys.** The key
