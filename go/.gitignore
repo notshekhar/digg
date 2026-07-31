@@ -1,0 +1,2 @@
+# The compiled binary; built by `go build ./cmd/digg`.
+digg
