@@ -1,0 +1,11 @@
+{
+    "name": "digg-web-build",
+    "private": true,
+    "description": "Build-time helper for digg's browser UI. digg itself is a Go program (see src/); this exists only so `bun run build:web` works from the repo root. The built page is committed to src/internal/server/webdist, so a clean checkout builds with the Go toolchain alone.",
+    "type": "module",
+    "scripts": {
+        "build:web": "cd web && bun install && bun run build",
+        "typecheck:web": "cd web && bun install && bun run typecheck",
+        "hash:web": "bun web/scripts/source-hash.ts"
+    }
+}

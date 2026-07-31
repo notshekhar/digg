@@ -15,8 +15,9 @@
  * embed.FS needs neither: the bundle cannot be stale relative to a binary that
  * compiled it in.
  */
-import { copyFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { HASH_FILE, sourceHash } from "./source-hash.ts";
 
 const webDir = join(import.meta.dir, "..");
 const src = join(webDir, "dist", "index.html");
@@ -48,5 +49,10 @@ if (!html.includes('data-theme="dark"')) {
 mkdirSync(dirname(out), { recursive: true });
 copyFileSync(src, out);
 
+// The fingerprint of the sources this was built from. CI compares it against
+// the working tree, so a bundle that no longer matches web/src cannot ship.
+const hash = sourceHash();
+writeFileSync(HASH_FILE, `${hash}\n`);
+
 const kb = (statSync(out).size / 1024).toFixed(0);
-console.log(`✓ embedded web UI → src/internal/server/webdist/index.html (${kb} KB)`);
+console.log(`✓ embedded web UI → src/internal/server/webdist/index.html (${kb} KB, sources ${hash})`);
