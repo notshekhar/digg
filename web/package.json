@@ -2,7 +2,7 @@
     "name": "digg-web",
     "private": true,
     "type": "module",
-    "description": "Source for the digg browser UI. Built to src/internal/server/webdist/index.html, which is committed and embedded into the Go binary — building digg from source never needs this toolchain.",
+    "description": "Source for the digg browser UI. Built to src/internal/server/webdist/index.html, which is committed and embedded into the Go binary \u2014 building digg from source never needs this toolchain.",
     "scripts": {
         "dev": "vite",
         "build": "vite build && bun run scripts/embed.ts",
@@ -24,6 +24,7 @@
         "react-dom": "^19.1.0"
     },
     "devDependencies": {
+        "@types/bun": "^1.2.0",
         "@types/react": "^19.1.0",
         "@types/react-dom": "^19.1.0",
         "@vitejs/plugin-react": "^4.4.1",
