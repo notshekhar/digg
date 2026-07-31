@@ -7,9 +7,11 @@ edit YAML, stream logs, **shell into containers**, **port-forward**, and run
 every day-2 action: scale, restart, roll back, cordon/drain, suspend cron,
 delete.
 
-It drives your local `kubectl`, so every auth method works out of the box —
-client certs, tokens, and exec plugins like aws/gcp/oidc. **kubectl must be on
-your PATH.**
+It reads your kubeconfig and talks to the API server directly, so every auth
+method works out of the box — client certs, tokens, and exec plugins like
+aws/gcp/oidc. **No kubectl required**, just a kubeconfig.
+
+One static binary, no runtime, no dependencies.
 
 ## Install
 
@@ -25,36 +27,52 @@ Windows:
 irm https://raw.githubusercontent.com/notshekhar/digg/main/install.ps1 | iex
 ```
 
+With Go:
+
+```bash
+go install github.com/notshekhar/digg/src/cmd/digg@latest
+```
+
 From source:
 
 ```bash
-bun install
-bun ./src/cli.ts        # run it
-bun build-bin.ts        # standalone binary in dist/bin/<target>/digg
+git clone https://github.com/notshekhar/digg && cd digg
+go build -o digg ./src/cmd/digg && ./digg
 ```
 
-Update with `digg update`. Uninstall with `DIGG_UNINSTALL=1 curl -fsSL .../install.sh | bash`,
-or `irm .../install.ps1 | iex` with `-Uninstall` on Windows.
+The browser UI is committed pre-built, so a clean checkout needs nothing but the
+Go toolchain.
+
+Update with `digg update` — it resolves the latest release, verifies its
+sha256, and swaps the binary in place (resolving the install symlink, so the
+install is never orphaned). Uninstall with
+`DIGG_UNINSTALL=1 curl -fsSL .../install.sh | bash`, or `irm .../install.ps1 | iex`
+with `-Uninstall` on Windows.
 
 ## Usage
 
 ```bash
 digg                       # opens http://127.0.0.1:9787/ in your browser
 digg --port 8080           # pick a port
+digg --host 0.0.0.0        # bind elsewhere (read the security note first)
 digg --no-open             # print the URL only
 digg update                # update to the latest version
+digg update --check        # say what an update would do, download nothing
+digg update --version=v2.0.0   # install a specific release
 digg version               # print the version
 ```
 
-`digg serve` does the same thing, said explicitly.
+`digg serve` does the same thing as bare `digg`, said explicitly, and
+`digg upgrade` is an alias for `digg update`.
 
 ### What you get
 
 - **Every kind, grouped.** Cluster, Workloads, Config, Network, Storage, Access
   Control, Definitions, then every CRD bucketed by API group. Nothing is listed
   that the cluster does not have, and nothing the cluster has is hidden.
-- **Cluster overview.** Node and pod capacity with live CPU/memory from
-  `kubectl top`, requested-vs-used on one track, pods needing attention, and a
+- **Cluster overview.** Node and pod capacity with live CPU/memory read
+  straight from `metrics.k8s.io` (unrounded — where `kubectl top` says 1Mi you
+  get 1.8Mi), requested-vs-used on one track, pods needing attention, and a
   warning-event feed. Clusters with no metrics-server show hatched gauges rather
   than a confident 0%.
 - **A real datagrid.** Virtualised (thousands of rows stay smooth), sortable on
@@ -66,8 +84,10 @@ digg version               # print the version
   ⌘S applies. A background refresh never overwrites a buffer you are editing.
 - **Live logs.** Follow, search with highlight, filter to matches, wrap,
   timestamps, `--previous`, container picker, adjustable history, download.
-- **Shell in the browser.** A real PTY into any container, a node shell via
-  `kubectl debug`, or a local shell with kubectl pointed at the context.
+- **Shell in the browser.** A real terminal into any container over the exec
+  API, a node shell via a privileged debug pod, an ephemeral busybox for
+  shell-less images (distroless, scratch), or a local shell with the context
+  pre-selected.
 - **A console that follows you.** Shells and port-forwards live in a floating
   console (⌘`) that is reachable from every page and survives navigation — a
   shell opened from a pod keeps running while you go read something else.
@@ -139,21 +159,62 @@ Logs. `esc` goes back to the table you came from, with your filter intact.
 Curated kinds — Pods, Deployments, StatefulSets, DaemonSets, Services, Ingresses,
 ConfigMaps, Secrets, Jobs, CronJobs, Nodes, Namespaces, PVCs — get rich columns
 and tailored dashboards. Press `:` to switch to those **or any other kind the
-cluster exposes** (CRDs, RBAC, HPAs, …), discovered via `kubectl api-resources`;
+cluster exposes** (CRDs, RBAC, HPAs, …), discovered from the API server itself;
 those open a generic list with yaml / describe / edit / delete / events.
 
 ## Development
 
-The server is plain TypeScript under `src/`. The browser UI is a React + Vite app
-under `web/`, compiled to a single self-contained HTML document and baked into
-`src/web/bundle.ts`, which is committed — so a clean checkout runs and builds
-with nothing but Bun.
+digg is a Go program. The browser UI is a React + Vite app under `web/`,
+compiled to one self-contained HTML document and committed to
+`src/internal/server/webdist/` — a clean checkout builds with only Go.
+
+```
+src/cmd/digg          the CLI
+src/internal/kube     cluster access: client, resources, watch, metrics,
+                      events, logs, exec, pty, forwards, discovery, drain
+src/internal/model    pure logic — the kind table, detail views, usage
+                      arithmetic, quantity parsing (all unit-tested)
+src/internal/server   HTTP + WebSockets, rows, gauges, catalog, overview,
+                      actions, detail, live deltas
+src/internal/settings ~/.digg/settings.json
+src/internal/update   `digg update` — the self-updater
+web/                  the React app
+```
 
 ```bash
-bun test                 # unit + live-cluster integration suite
-bun run typecheck
-bun run build:web        # after ANY change under web/src — rebuilds bundle.ts
-bun run build            # standalone binary (refuses a stale bundle)
+go build -o digg ./src/cmd/digg   # build
+go test ./...                     # unit + live-cluster suite (skips with no cluster)
+go vet ./...
 
-cd web && bun run dev    # Vite dev server on :9788, proxying to digg serve
+bun run build:web                 # after ANY change under web/src
+cd web && bun run dev             # Vite dev server on :9788, proxying to digg
 ```
+
+The live-cluster tests skip themselves when there is no reachable cluster, so
+`go test ./...` is green on a laptop with no kubeconfig and thorough on one with
+minikube running.
+
+CI cross-compiles all five release targets on every push, and checks that the
+committed web bundle still matches `web/src` — a stale bundle would otherwise
+ship silently.
+
+### Talking to Kubernetes
+
+digg uses `client-go` directly rather than shelling out to `kubectl`:
+
+- **Watches are informers.** They resume from a `resourceVersion` after a
+  dropped connection instead of re-listing, share one upstream stream across
+  every tab and subscription, and know when the initial sync is done.
+- **One client per context** means one exec-credential plugin run and one TLS
+  handshake for the process lifetime, not per request.
+- **Writes go through kubectl's own libraries** (`describe`, `drain`,
+  `polymorphichelpers`), so the output and error text are the ones you already
+  know.
+
+Reads stream; metrics poll. That split is not a compromise — `metrics.k8s.io`
+implements only get and list, and metrics-server samples on its own schedule.
+
+Three behaviours differ from the pre-2.0 releases, which shelled out to kubectl:
+**apply** uses server-side apply with the field manager `digg`; **kubectl is no
+longer required on PATH** (a readable kubeconfig is the only precondition); and
+`version` reports digg's own build rather than kubectl's.

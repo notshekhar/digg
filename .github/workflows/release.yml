@@ -8,7 +8,7 @@ on:
     workflow_dispatch:
         inputs:
             tag:
-                description: "Version tag (e.g. v0.1.5)."
+                description: "Version tag (e.g. v2.0.0)."
                 required: true
 
 permissions:
@@ -33,8 +33,9 @@ jobs:
                   echo "ver=${tag#v}" >> "$GITHUB_OUTPUT"
 
     # ─── Job 2: per-target binary build (matrix) ──────────────────────────────
-    # digg is pure JS/TS (no native modules), so every target cross-compiles from
-    # a single ubuntu runner — the matrix just parallelizes + isolates each target.
+    # digg is pure Go with CGO_ENABLED=0, so every target cross-compiles from a
+    # single ubuntu runner — no per-OS runners, no toolchain surprises. The
+    # matrix only parallelizes and isolates each target.
     build:
         name: binary (${{ matrix.target }})
         needs: prepare
@@ -42,39 +43,73 @@ jobs:
         strategy:
             fail-fast: false
             matrix:
-                target: [darwin-arm64, darwin-x64, linux-x64, linux-arm64, windows-x64]
+                include:
+                    - { target: darwin-arm64, goos: darwin, goarch: arm64 }
+                    - { target: darwin-x64, goos: darwin, goarch: amd64 }
+                    - { target: linux-x64, goos: linux, goarch: amd64 }
+                    - { target: linux-arm64, goos: linux, goarch: arm64 }
+                    - { target: windows-x64, goos: windows, goarch: amd64 }
         steps:
             - uses: actions/checkout@v4
-            - uses: oven-sh/setup-bun@v2
+            - uses: actions/setup-go@v5
               with:
-                  bun-version: latest
+                  go-version: "1.26"
+                  cache: true
 
-            - name: Sync package version
+            - name: Build
+              env:
+                  CGO_ENABLED: "0"
+                  GOOS: ${{ matrix.goos }}
+                  GOARCH: ${{ matrix.goarch }}
               run: |
-                  bun -e "
-                    const fs = require('fs');
-                    const j = JSON.parse(fs.readFileSync('package.json','utf8'));
-                    j.version = '${{ needs.prepare.outputs.ver }}';
-                    fs.writeFileSync('package.json', JSON.stringify(j, null, 4) + '\n');
-                  "
+                  ext=""
+                  [ "${{ matrix.goos }}" = "windows" ] && ext=".exe"
+                  mkdir -p "dist/bin/${{ matrix.target }}"
 
-            - run: bun install --frozen-lockfile
+                  # -s -w drop the symbol table and DWARF: ~30% off a binary
+                  # nobody debugs from a release artefact.
+                  # -trimpath keeps the builder's absolute paths out of it.
+                  go build -trimpath \
+                    -ldflags "-s -w -X main.Version=${{ needs.prepare.outputs.ver }}" \
+                    -o "dist/bin/${{ matrix.target }}/digg$ext" \
+                    ./src/cmd/digg
 
-            # Retry the compile: fetching a cross-target Bun runtime (especially
-            # the -baseline x64 variants) is occasionally flaky ("download may be
-            # incomplete"). 3 attempts turn a transient blip into a pass.
-            - name: Build binary
+                  ls -lh "dist/bin/${{ matrix.target }}/digg$ext"
+
+            # install.sh reads this to decide whether an install is current, so
+            # it has to keep existing. The tag is the single source of truth for
+            # the version — nothing in the repo carries it.
+            - name: Stage package.json
               run: |
-                  n=0
-                  until bun build-bin.ts bun-${{ matrix.target }}; do
-                    n=$((n + 1))
-                    if [ "$n" -ge 3 ]; then echo "build failed after $n attempts"; exit 1; fi
-                    echo "build attempt $n failed — retrying in 5s…"; sleep 5
-                  done
+                  cat > "dist/bin/${{ matrix.target }}/package.json" <<JSON
+                  {
+                      "name": "digg",
+                      "version": "${{ needs.prepare.outputs.ver }}",
+                      "description": "digg — a Kubernetes cockpit in your browser."
+                  }
+                  JSON
 
-            - name: Checksum
+            # Layout is <target>/digg + package.json, unchanged from the Bun
+            # releases, so an already-installed install.sh keeps working across
+            # the rewrite.
+            - name: Package
               working-directory: dist/bin
-              run: sha256sum "digg-${{ matrix.target }}.tar.gz" > "digg-${{ matrix.target }}.tar.gz.sha256"
+              run: |
+                  tar -czf "digg-${{ matrix.target }}.tar.gz" "${{ matrix.target }}"
+                  sha256sum "digg-${{ matrix.target }}.tar.gz" > "digg-${{ matrix.target }}.tar.gz.sha256"
+                  cat "digg-${{ matrix.target }}.tar.gz.sha256"
+
+            # A binary that cannot start is worth catching before it is published.
+            - name: Smoke test (native target only)
+              if: matrix.target == 'linux-x64'
+              run: |
+                  out="$(./dist/bin/${{ matrix.target }}/digg --version)"
+                  echo "version reports: $out"
+                  [ "$out" = "${{ needs.prepare.outputs.ver }}" ] || {
+                    echo "✗ --version printed '$out', expected '${{ needs.prepare.outputs.ver }}'"
+                    exit 1
+                  }
+                  ./dist/bin/${{ matrix.target }}/digg --help > /dev/null
 
             - name: Upload binary artifact
               uses: actions/upload-artifact@v4
@@ -106,6 +141,16 @@ jobs:
                     sha256sum "$f" >> SHA256SUMS
                   done
                   cat SHA256SUMS
+
+            - name: Refuse a partial release
+              working-directory: release
+              run: |
+                  count="$(ls digg-*.tar.gz | wc -l)"
+                  [ "$count" -eq 5 ] || {
+                    echo "✗ expected 5 target tarballs, found $count — not publishing a partial release"
+                    ls -l
+                    exit 1
+                  }
 
             - name: Create / update GitHub Release
               uses: softprops/action-gh-release@v2

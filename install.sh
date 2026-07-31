@@ -4,7 +4,7 @@
 #
 # Layout after install:
 #   $DIGG_HOME/               (default: ~/.digg-bin)
-#     ├── digg                (standalone binary; needs kubectl on PATH)
+#     ├── digg                (standalone binary; reads your kubeconfig directly)
 #     └── package.json
 #   $BIN_DIR/digg → $DIGG_HOME/digg   (symlink on PATH)
 #
@@ -163,7 +163,10 @@ main() {
 
   bold "▶ digg installer"
   need_tool curl; need_tool tar
-  command -v kubectl >/dev/null 2>&1 || dim "  note: kubectl not found — digg needs it at runtime."
+  # digg talks to the API server itself; kubectl is not a runtime dependency.
+  # A missing kubeconfig is the thing that actually stops it working.
+  [ -n "${KUBECONFIG:-}" ] || [ -f "$HOME/.kube/config" ] || \
+    dim "  note: no kubeconfig found — digg needs one to reach a cluster."
 
   local target latest installed
   target="$(detect_target)"

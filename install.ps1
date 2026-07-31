@@ -9,8 +9,10 @@
 #     ├── digg.exe
 #     └── package.json                version, read via dirname(execPath)
 #
-# digg drives your local kubectl, so kubectl has to be on PATH at runtime —
-# that is what carries your cluster credentials, including exec plugins.
+# digg reads your kubeconfig directly and talks to the API server itself, so
+# kubectl is not needed at runtime. Every auth method still works, including
+# exec credential plugins (aws/gcp/oidc) — those are launched from the
+# kubeconfig, not from kubectl.
 #
 # Parameters:
 #   -Version <vX.Y.Z>   pin a specific tag        (env DIGG_VERSION)
@@ -219,8 +221,10 @@ Add-ToUserPath $DiggHome
 $version = & $exe version
 Write-Host ""
 Write-Bold "digg $version"
-if (-not (Get-Command kubectl -ErrorAction SilentlyContinue)) {
-    Write-Err "  kubectl is not on PATH — digg needs it to reach your clusters"
+# digg talks to the API server itself; kubectl is not a runtime dependency.
+# A missing kubeconfig is the thing that actually stops it working.
+if (-not ($env:KUBECONFIG -or (Test-Path (Join-Path $HOME ".kube\config")))) {
+    Write-Err "  no kubeconfig found — digg needs one to reach your clusters"
 }
 Write-Dim "  run: digg"
 Write-Dim "  it opens http://127.0.0.1:9787 - your clusters, in the browser."

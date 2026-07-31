@@ -1,29 +1,11 @@
 {
-    "name": "digg",
-    "version": "1.5.0",
-    "description": "digg \u2014 a Kubernetes cockpit in your browser, driven by your local kubectl.",
+    "name": "digg-web-build",
+    "private": true,
+    "description": "Build-time helper for digg's browser UI. digg itself is a Go program (see src/); this exists only so `bun run build:web` works from the repo root. The built page is committed to src/internal/server/webdist, so a clean checkout builds with the Go toolchain alone.",
     "type": "module",
-    "license": "MIT",
-    "bin": {
-        "digg": "./src/cli.ts"
-    },
-    "files": [
-        "src",
-        "examples"
-    ],
     "scripts": {
-        "start": "bun ./src/cli.ts",
-        "build": "bun build-bin.ts",
         "build:web": "cd web && bun install && bun run build",
-        "test": "bun test",
-        "typecheck": "tsc --noEmit"
-    },
-    "dependencies": {
-        "@types/configstore": "^6.0.2",
-        "configstore": "^8.0.0",
-        "yaml": "^2.9.0"
-    },
-    "devDependencies": {
-        "@types/bun": "latest"
+        "typecheck:web": "cd web && bun install && bun run typecheck",
+        "hash:web": "bun web/scripts/source-hash.ts"
     }
 }

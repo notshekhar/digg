@@ -1,5 +1,47 @@
 # Changelog
 
+## v2.0.0
+
+- **digg is a Go program now, and it no longer needs kubectl.** It reads your
+  kubeconfig and talks to the API server itself, so every auth method still
+  works — client certs, tokens, and exec plugins like aws/gcp/oidc, which are
+  launched from the kubeconfig rather than by kubectl. One static binary with
+  nothing to install alongside it, and half the size: 26MB against 56MB.
+- **Watches survive a dropped connection.** The old build drove `kubectl
+  --watch`, which reports no resourceVersion and no marker for "the first list
+  is done" — so every reconnect re-listed the whole collection, and the table
+  had to guess when its opening burst had finished by waiting for 250ms of
+  quiet. Watches are informers now: they resume from where they left off, share
+  one upstream stream across every tab and subscription, and know when they are
+  synced. Measured on a live cluster, a reconnect costs zero extra list calls.
+- **Metrics are no longer rounded.** They come from `metrics.k8s.io` directly
+  rather than from `kubectl top`, which prints whole mebibytes — where a
+  container reads 1Mi in kubectl, its card here reads 1.8Mi. Clusters with no
+  metrics-server still show hatched gauges rather than a confident 0%.
+- **One connection per cluster, not one per question.** Opening a page used to
+  re-run your exec credential plugin and redo a TLS handshake for each request
+  it made. Now that happens once for the life of the process, which is most
+  noticeable on EKS and GKE, where every one of those was a subprocess.
+- **`digg update` updates itself.** It resolves the latest release, verifies
+  its checksum, and replaces the binary in place — including when the thing on
+  your PATH is a symlink into `~/.digg-bin`, where it replaces the file the link
+  points at instead of clobbering the link. If the swap fails the previous
+  binary is put back, so an interrupted update never leaves you without a
+  working digg. `digg update --check` says what it would do without downloading
+  anything, and `--version=vX.Y.Z` installs a specific release.
+- **The YAML editor's cursor is visible in dark mode.** It was drawing a black
+  caret on a dark background: the editor never enabled its own selection layer,
+  so every cursor rule in the theme was dead CSS and CodeMirror's default took
+  over. It now draws a 2px accent cursor that follows the light/dark toggle at
+  runtime. Fold markers got a real hit area too — they were a chevron in a
+  9px-wide column with a 1px target, easy to mistake for punctuation — and a
+  folded block stays visibly folded instead of only showing it on hover.
+
+Three things behave differently to v1.x. Applying a manifest uses server-side
+apply under the field manager `digg`. `digg version` reports digg's own build
+rather than the kubectl it used to shell out to. And kubectl is no longer a
+runtime dependency at all — a readable kubeconfig is the only precondition.
+
 ## v1.5.0
 
 - **The names in a workload's spec are links now.** A Deployment's YAML is full

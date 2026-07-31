@@ -7,17 +7,73 @@ on:
 
 jobs:
     check:
+        name: build + test
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-go@v5
+              with:
+                  go-version: "1.26"
+                  cache: true
+
+            - name: gofmt
+              run: |
+                  unformatted="$(gofmt -l ./src 2>/dev/null || true)"
+                  if [ -n "$unformatted" ]; then
+                    echo "these files are not gofmt'd:"; echo "$unformatted"
+                    exit 1
+                  fi
+
+            - name: go vet
+              run: go vet ./...
+
+            # The live-cluster tests skip themselves when there is no kubeconfig,
+            # so this runs the pure ones (model, settings, update) and proves the
+            # rest compile.
+            - name: go test
+              run: go test ./...
+
+            - name: Build + smoke
+              run: |
+                  go build -o digg ./src/cmd/digg
+                  ./digg --version
+                  ./digg --help | head -n 3
+
+            # Not the full release matrix — that lives in release.yml, which
+            # refuses to publish a partial set. This is the one target that can
+            # break without anyone noticing: the pty is split across
+            # pty.go (//go:build !windows) and pty_stub_windows.go, so a change
+            # to one can leave the other missing a symbol. vet typechecks, which
+            # catches exactly that, and costs ~4s against ~17s for a full build.
+            - name: Typecheck the windows build
+              env:
+                  CGO_ENABLED: "0"
+                  GOOS: windows
+                  GOARCH: amd64
+              run: go vet ./src/...
+
+    web:
+        name: web bundle
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v4
             - uses: oven-sh/setup-bun@v2
               with:
                   bun-version: latest
-            - run: bun install --frozen-lockfile
-            - name: Typecheck
-              run: bunx tsc --noEmit
-            - name: Build binary (smoke)
-              run: |
-                  bun build-bin.ts
-                  bin="$(find dist/bin -maxdepth 2 -name digg -type f | head -n1)"
-                  "$bin" --version
+
+            # src/internal/server/webdist/ is committed so a clean checkout
+            # builds with only Go, which leaves one failure mode: editing
+            # web/src and forgetting to rebuild. Comparing a hash of the sources
+            # against the one recorded at build time catches that without
+            # installing anything — no lockfile to resolve, and no dependence on
+            # Vite being byte-reproducible across machines.
+            - name: Bundle is in sync with web/src
+              run: bun web/scripts/source-hash.ts --check
+
+            # Deliberately not --frozen-lockfile: bun writes a lockfileVersion
+            # the released bun cannot always read (a newer local bun produced v2
+            # while latest was 1.3.14), and a typecheck is not worth pinning the
+            # whole toolchain over. Dependency drift shows up here as a type
+            # error, which is the point.
+            - name: Typecheck the UI
+              run: cd web && bun install && bun run typecheck

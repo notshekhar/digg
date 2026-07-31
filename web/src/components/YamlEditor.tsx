@@ -9,8 +9,18 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { EditorState, type Extension } from "@codemirror/state";
-import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from "@codemirror/view";
+import { Compartment, EditorState, type Extension } from "@codemirror/state";
+import {
+    EditorView,
+    keymap,
+    lineNumbers,
+    highlightActiveLine,
+    highlightActiveLineGutter,
+    drawSelection,
+    dropCursor,
+    rectangularSelection,
+    crosshairCursor,
+} from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { searchKeymap, highlightSelectionMatches, search } from "@codemirror/search";
 import { HighlightStyle, syntaxHighlighting, indentUnit, foldGutter, bracketMatching } from "@codemirror/language";
@@ -18,10 +28,23 @@ import { tags as t } from "@lezer/highlight";
 import { yaml } from "@codemirror/lang-yaml";
 import "./YamlEditor.css";
 
-/** Colours come from CSS variables so the editor follows the app theme. */
-const diggTheme = EditorView.theme({
+/**
+ * Colours come from CSS variables so the editor follows the app theme.
+ *
+ * `dark` is not cosmetic here: CodeMirror's own base theme sets
+ * `caret-color: black` unless it is told the editor is dark, which on our
+ * background is an invisible cursor. The flag cannot be baked in either, since
+ * the theme toggles at runtime — hence the compartment below.
+ */
+const themeSpec = {
     "&": { backgroundColor: "transparent", color: "var(--fg)", height: "100%", fontSize: "12.5px" },
-    ".cm-content": { fontFamily: "var(--mono)", padding: "8px 0 40px" },
+    ".cm-content": {
+        fontFamily: "var(--mono)",
+        padding: "8px 0 40px",
+        // The fallback for the drawn cursor: with a real selection layer this
+        // is rarely seen, but a dropped/native caret must never be black.
+        caretColor: "var(--accent)",
+    },
     ".cm-scroller": { fontFamily: "var(--mono)", lineHeight: "1.55", overflow: "auto" },
     ".cm-gutters": {
         backgroundColor: "var(--bg-sunk)",
@@ -32,8 +55,23 @@ const diggTheme = EditorView.theme({
     },
     ".cm-activeLine": { backgroundColor: "var(--bg-hover)" },
     ".cm-activeLineGutter": { backgroundColor: "var(--bg-hover)", color: "var(--fg-muted)" },
-    ".cm-cursor": { borderLeftColor: "var(--accent)", borderLeftWidth: "2px" },
-    "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection": {
+
+    // The cursor is drawn by drawSelection(), so it is a real element we can
+    // make thick enough to find on a dark background — a 1px native caret in a
+    // 12.5px mono face is not.
+    //
+    // Colour and width ONLY. The blink belongs to CodeMirror, which animates
+    // .cm-cursorLayer and swaps between its `cm-blink`/`cm-blink2` keyframes to
+    // restart the phase every time the cursor moves (so it sits solid while you
+    // type). Adding an animation here beats against that one, and redefining
+    // `@keyframes cm-blink` hijacks half of the pair — the blink pattern then
+    // changes on every cursor move, which reads as random flickering.
+    ".cm-cursor, .cm-dropCursor": {
+        borderLeft: "2px solid var(--accent)",
+        marginLeft: "-1px",
+    },
+
+    "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
         backgroundColor: "var(--accent-soft)",
     },
     ".cm-selectionMatch": { backgroundColor: "var(--accent-soft)" },
@@ -46,8 +84,40 @@ const diggTheme = EditorView.theme({
         border: "1px solid var(--line)",
         borderRadius: 0,
     },
-    ".cm-foldGutter span": { color: "var(--fg-faint)" },
-});
+
+    // Fold markers. The defaults are a bare chevron in a 9px column with a 1px
+    // hit area — technically present, practically unclickable and easy to
+    // mistake for punctuation. Give them room, a resting state that reads as
+    // faint, and a hover that says they are controls.
+    //
+    // Only colour and width are touched here: CodeMirror lays the gutter
+    // elements out itself and sizes them against the line, so overriding their
+    // `display` collapses them to zero height and the marker stops being
+    // clickable at all.
+    ".cm-foldGutter": { minWidth: "16px" },
+    ".cm-foldGutter .cm-gutterElement": {
+        padding: "0 2px",
+        cursor: "pointer",
+        color: "var(--fg-faint)",
+        opacity: "0.5",
+        transition: "opacity 90ms ease, color 90ms ease",
+    },
+    ".cm-foldGutter .cm-gutterElement:hover": { opacity: "1", color: "var(--accent)" },
+    ".cm-foldPlaceholder": {
+        backgroundColor: "var(--accent-soft)",
+        border: "1px solid var(--line)",
+        borderRadius: "3px",
+        color: "var(--fg-muted)",
+        margin: "0 2px",
+        padding: "0 6px",
+    },
+} as const;
+
+const lightTheme = EditorView.theme(themeSpec, { dark: false });
+const darkTheme = EditorView.theme(themeSpec, { dark: true });
+const themeCompartment = new Compartment();
+
+const isDark = () => document.documentElement.dataset.theme !== "light";
 
 const diggHighlight = HighlightStyle.define([
     { tag: [t.definition(t.propertyName), t.propertyName], color: "var(--accent)" },
@@ -80,9 +150,27 @@ export function YamlEditor({
     const extensions = useMemo<Extension[]>(
         () => [
             lineNumbers(),
-            foldGutter(),
+            foldGutter({
+                // The defaults are "⌄" and "›", which differ in weight and
+                // sit at different optical heights. One glyph rotated reads as
+                // one control in two states.
+                markerDOM: (open) => {
+                    const el = document.createElement("span");
+                    el.className = `cm-foldMarker${open ? "" : " cm-foldMarker-closed"}`;
+                    el.textContent = "▾";
+                    el.title = open ? "Fold this block" : "Unfold this block";
+                    return el;
+                },
+            }),
             history(),
             bracketMatching(),
+            // Without drawSelection the cursor and selection are the browser's
+            // own, which means every .cm-cursor/.cm-selectionBackground rule
+            // below is dead CSS and the caret is whatever the base theme says.
+            drawSelection(),
+            dropCursor(),
+            rectangularSelection(),
+            crosshairCursor(),
             highlightActiveLine(),
             highlightActiveLineGutter(),
             highlightSelectionMatches(),
@@ -90,7 +178,7 @@ export function YamlEditor({
             indentUnit.of("  "),
             yaml(),
             syntaxHighlighting(diggHighlight),
-            diggTheme,
+            themeCompartment.of(isDark() ? darkTheme : lightTheme),
             EditorView.lineWrapping,
             keymap.of([
                 {
@@ -136,6 +224,20 @@ export function YamlEditor({
         if (v.state.doc.toString() === value) return;
         v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: value } });
     }, [value]);
+
+    // The theme toggles at runtime from three places (the top bar, the palette,
+    // and boot), all of which just set data-theme. Watching the attribute keeps
+    // the editor in step without threading a prop through any of them.
+    useEffect(() => {
+        const sync = () => {
+            view.current?.dispatch({
+                effects: themeCompartment.reconfigure(isDark() ? darkTheme : lightTheme),
+            });
+        };
+        const observer = new MutationObserver(sync);
+        observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+        return () => observer.disconnect();
+    }, []);
 
     return <div className="cm-host" ref={host} />;
 }

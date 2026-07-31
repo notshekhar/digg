@@ -11,6 +11,30 @@
     outline: none;
 }
 
+/*
+ * Fold markers. One glyph in two states: pointing down when the block is open,
+ * rotated when it is closed, so the control reads as the same thing either way
+ * rather than as two different pieces of punctuation.
+ *
+ * The span keeps the row's inherited line-height so it fills the gutter cell
+ * and stays optically centred on its line — a smaller line-height here shrinks
+ * the click target and drifts the glyph upward.
+ */
+.cm-host .cm-foldMarker {
+    display: block;
+    width: 100%;
+    text-align: center;
+    font-size: 9px;
+    transition: transform 90ms ease;
+}
+.cm-host .cm-foldMarker-closed {
+    /* Closed blocks keep the accent so a collapsed region is visible without
+       hovering; otherwise the only sign is the missing lines. */
+    transform: rotate(-90deg);
+    color: var(--accent);
+    opacity: 1;
+}
+
 .textpane {
     display: flex;
     flex-direction: column;
