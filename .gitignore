@@ -2,3 +2,8 @@ node_modules/
 dist/
 *.log
 .DS_Store
+
+# The compiled binary. Anchored with a leading slash: a bare `digg` pattern
+# also matches the cmd/digg/ DIRECTORY, which silently excluded main.go from a
+# commit once already.
+/digg

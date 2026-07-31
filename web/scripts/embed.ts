@@ -1,22 +1,26 @@
 #!/usr/bin/env bun
 /**
- * Bakes `web/dist/index.html` into `src/web/bundle.ts`.
+ * Copies `web/dist/index.html` to where the Go build embeds it from.
  *
- * That generated module is COMMITTED. `bun ./src/cli.ts` and `bun build
- * --compile` must work on a clean checkout with no node toolchain — the Vite
- * app is a build-time dependency of the repo, never a runtime one. Anyone
- * touching web/ runs `bun run build` in web/ and commits both sides.
+ * go:embed cannot reach outside its own package directory, so the built bundle
+ * has to live next to the package that embeds it. That copy is COMMITTED: a
+ * clean checkout must build with nothing but the Go toolchain, and the Vite app
+ * stays a build-time dependency of the repo rather than a runtime one.
  *
- * The html is emitted as a JSON string literal (one long line). It is not meant
- * to be read or diffed; the reviewable source is web/src.
+ * Anyone touching web/ runs `bun run build` in web/ and commits both sides.
+ *
+ * This replaces the old bundle.ts generator. The Bun build had to serialise the
+ * html as a TypeScript string literal and guard it with a content hash, because
+ * a checkout writes files in arbitrary order and an mtime check flakes on CI.
+ * embed.FS needs neither: the bundle cannot be stale relative to a binary that
+ * compiled it in.
  */
-import { readFileSync, writeFileSync, statSync } from "node:fs";
-import { join } from "node:path";
-import { webSourceHash } from "../../scripts/web-hash.ts";
+import { copyFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 const webDir = join(import.meta.dir, "..");
 const src = join(webDir, "dist", "index.html");
-const out = join(webDir, "..", "src", "web", "bundle.ts");
+const out = join(webDir, "..", "src", "internal", "server", "webdist", "index.html");
 
 let html: string;
 try {
@@ -34,25 +38,15 @@ if (/<script[^>]+src=/.test(html) || /<link[^>]+rel="stylesheet"[^>]+href="\.?\/
     console.error("embed: dist/index.html still references external assets — singlefile did not inline");
     process.exit(1);
 }
+// The server stamps the theme onto this attribute per request; without it the
+// page would always paint dark first and then flip.
+if (!html.includes('data-theme="dark"')) {
+    console.error('embed: dist/index.html has no data-theme="dark" for the server to stamp');
+    process.exit(1);
+}
 
-const header = `/**
- * GENERATED — do not edit. Source lives in web/; rebuild with:
- *
- *     cd web && bun install && bun run build
- *
- * One self-contained html document: React app, styles and fonts-link inlined.
- * serve.ts injects the theme and boot state into it per request.
- */
-
-`;
-
-// The fingerprint of the sources this was built from; build-bin.ts compares it
-// against the working tree so a stale bundle can never be shipped.
-const sourceHash = webSourceHash(join(webDir, ".."));
-writeFileSync(
-    out,
-    `${header}export const SOURCE_HASH = ${JSON.stringify(sourceHash)};\n\nexport const INDEX_HTML: string = ${JSON.stringify(html)};\n`,
-);
+mkdirSync(dirname(out), { recursive: true });
+copyFileSync(src, out);
 
 const kb = (statSync(out).size / 1024).toFixed(0);
-console.log(`✓ embedded web UI → src/web/bundle.ts (${kb} KB)`);
+console.log(`✓ embedded web UI → src/internal/server/webdist/index.html (${kb} KB)`);

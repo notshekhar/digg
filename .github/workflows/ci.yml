@@ -7,17 +7,70 @@ on:
 
 jobs:
     check:
+        name: build + test
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-go@v5
+              with:
+                  go-version: "1.26"
+                  cache: true
+
+            - name: gofmt
+              run: |
+                  unformatted="$(gofmt -l ./src ./cmd 2>/dev/null || true)"
+                  if [ -n "$unformatted" ]; then
+                    echo "these files are not gofmt'd:"; echo "$unformatted"
+                    exit 1
+                  fi
+
+            - name: go vet
+              run: go vet ./...
+
+            # The live-cluster tests skip themselves when there is no kubeconfig,
+            # so this runs the pure ones (model, settings) and proves the rest
+            # compile.
+            - name: go test
+              run: go test ./...
+
+            - name: Build binary (smoke)
+              run: |
+                  go build -o digg ./src/cmd/digg
+                  ./digg --version
+                  ./digg --help | head -n 3
+
+            # Every target must cross-compile before a tag does, otherwise the
+            # release job is where you find out.
+            - name: Cross-compile every release target
+              run: |
+                  for t in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64; do
+                    echo "  → $t"
+                    CGO_ENABLED=0 GOOS="${t%/*}" GOARCH="${t#*/}" go build -o /dev/null ./src/cmd/digg
+                  done
+
+    web:
+        name: web bundle
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v4
             - uses: oven-sh/setup-bun@v2
               with:
                   bun-version: latest
-            - run: bun install --frozen-lockfile
-            - name: Typecheck
-              run: bunx tsc --noEmit
-            - name: Build binary (smoke)
+
+            - name: Typecheck the UI
+              run: cd web && bun install --frozen-lockfile && bun run typecheck
+
+            # src/internal/server/webdist/index.html is committed so a clean
+            # checkout builds with only Go. Rebuilding here proves the commit
+            # matches web/src — a stale bundle would otherwise ship silently.
+            - name: Bundle is in sync with web/src
               run: |
-                  bun build-bin.ts
-                  bin="$(find dist/bin -maxdepth 2 -name digg -type f | head -n1)"
-                  "$bin" --version
+                  cp src/internal/server/webdist/index.html /tmp/committed.html
+                  cd web && bun run build
+                  cd ..
+                  if ! cmp -s /tmp/committed.html src/internal/server/webdist/index.html; then
+                    echo "✗ the committed web bundle is stale."
+                    echo "  Run: bun run build:web  — and commit src/internal/server/webdist/index.html"
+                    exit 1
+                  fi
+                  echo "✓ bundle matches web/src"
