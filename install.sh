@@ -31,74 +31,80 @@ err()  { printf "\033[31m%s\033[0m\n" "$*" >&2; }
 need_tool() { command -v "$1" >/dev/null 2>&1 || { err "Missing required tool: $1"; exit 1; }; }
 
 # ── Download progress bar ──────────────────────────────────────────────────
-# curl traces into a FIFO; content-length and `<= recv data` records drive a
-# ■■■･･･ 42% bar. TTY only — anything else falls back to plain curl. Same
-# implementation hehe, loop and markdown ship.
-unbuffered_sed() {
-  if echo | sed -u -e "" >/dev/null 2>&1; then
-    sed -nu "$@"
-  elif echo | sed -l -e "" >/dev/null 2>&1; then
-    sed -nl "$@"
-  else
-    local pad; pad="$(printf "\n%512s" "")"
-    sed -ne "s/$/\\${pad}/" "$@"
-  fi
-}
+# A ■■■･･･ 42% bar driven by the size of the file on disk, which is the only
+# unambiguous measure of how much has actually arrived. TTY only — anything
+# else falls back to plain curl.
+#
+# This replaces a version that parsed `curl --trace-ascii` out of a FIFO. That
+# had three problems. It wrote an 11MB trace to disk for a 10MB download. It
+# needed a sed that could line-buffer, with a padding hack for ones that could
+# not. And it counted `<= recv data` records, which are socket reads rather
+# than body bytes — so the bar hit 100% while the transfer was still running,
+# and on a slow link that is indistinguishable from a hang.
+#
+# The rate is shown for the same reason: a slow network should read as slow.
 
 PROGRESS_COLOR='\033[38;5;215m'
 PROGRESS_NC='\033[0m'
 
+file_size() {
+  [ -f "$1" ] || { echo 0; return; }
+  wc -c < "$1" 2>/dev/null | tr -d ' '
+}
+
+# The asset's real size, after redirects — the last content-length in the
+# chain. Costs one HEAD (~0.5s) and is what gives the bar an honest
+# denominator; 0 when the server will not say, and the bar then just counts up.
+remote_size() {
+  curl -fsIL "$1" 2>/dev/null | tr -d '\r' \
+    | awk 'tolower($1) == "content-length:" { n = $2 } END { if (n ~ /^[0-9]+$/) print n; else print 0 }'
+}
+
 print_progress() {
-  local bytes="$1" length="$2"
-  [ "$length" -gt 0 ] || return 0
-  local width=50
-  local percent=$(( bytes * 100 / length ))
+  local bytes="$1" length="$2" secs="$3"
+  local width=42 percent=0
+  [ "$length" -gt 0 ] && percent=$(( bytes * 100 / length ))
   [ "$percent" -gt 100 ] && percent=100
   local on=$(( percent * width / 100 ))
   local off=$(( width - on ))
   local filled empty
   filled=$(printf "%*s" "$on" ""); filled=${filled// /■}
   empty=$(printf "%*s" "$off" ""); empty=${empty// /･}
-  printf "\r${PROGRESS_COLOR}%s%s %3d%%${PROGRESS_NC}" "$filled" "$empty" "$percent" >&4
+  awk -v f="$filled" -v e="$empty" -v p="$percent" -v b="$bytes" -v s="$secs" \
+      -v c="$PROGRESS_COLOR" -v n="$PROGRESS_NC" 'BEGIN {
+        rate = (s > 0) ? sprintf("  %.1f MB/s", b / s / 1048576) : ""
+        printf "\r%s%s%s %3d%%%s  %.1f MB%s ", c, f, e, p, n, b / 1048576, rate
+      }' >&4
 }
 
 download_with_progress() {
   local url="$1" output="$2"
   if [ -t 2 ]; then exec 4>&2; else exec 4>/dev/null; fi
 
-  local tracefile="${TMPDIR:-/tmp}/digg_install_$$.trace"
-  rm -f "$tracefile"
-  mkfifo "$tracefile" 2>/dev/null || return 1
+  local length; length="$(remote_size "$url")"
 
   printf "\033[?25l" >&4
-  trap "trap - RETURN; rm -f \"$tracefile\"; printf '\033[?25h' >&4; exec 4>&-" RETURN
+  trap "trap - RETURN; printf '\033[?25h' >&4; exec 4>&-" RETURN
 
-  ( curl -f --trace-ascii "$tracefile" -s -L -o "$output" "$url" ) &
-  local curl_pid=$!
+  curl -fL -s -o "$output" "$url" &
+  local curl_pid=$! start now
+  start="$(date +%s)"
 
-  unbuffered_sed \
-    -e 'y/ACDEGHLNORTV/acdeghlnortv/' \
-    -e '/^0000: content-length:/p' \
-    -e '/^<= recv data/p' \
-    "$tracefile" | \
-  {
-    local length=0 bytes=0
-    while IFS=" " read -r -a line; do
-      [ "${#line[@]}" -lt 2 ] && continue
-      local tag="${line[0]} ${line[1]}"
-      if [ "$tag" = "0000: content-length:" ]; then
-        # A redirect chain restarts the count; the asset response wins.
-        length="$(echo "${line[2]}" | tr -d '\r')"
-        bytes=0
-      elif [ "$tag" = "<= recv" ]; then
-        bytes=$(( bytes + ${line[3]} ))
-        [ "$length" -gt 0 ] && print_progress "$bytes" "$length"
-      fi
-    done
-  }
+  while kill -0 "$curl_pid" 2>/dev/null; do
+    now="$(date +%s)"
+    print_progress "$(file_size "$output")" "$length" "$(( now - start ))"
+    sleep 0.2
+  done
 
-  wait $curl_pid
+  wait "$curl_pid"
   local ret=$?
+  if [ "$ret" -eq 0 ]; then
+    now="$(date +%s)"
+    # Finish on the real size, so the bar always lands on 100% rather than
+    # stopping at whatever the last poll happened to catch.
+    local final; final="$(file_size "$output")"
+    print_progress "$final" "$final" "$(( now - start ))"
+  fi
   echo "" >&4
   return $ret
 }
