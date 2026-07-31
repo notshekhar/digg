@@ -59,12 +59,17 @@ const themeSpec = {
     // The cursor is drawn by drawSelection(), so it is a real element we can
     // make thick enough to find on a dark background — a 1px native caret in a
     // 12.5px mono face is not.
+    //
+    // Colour and width ONLY. The blink belongs to CodeMirror, which animates
+    // .cm-cursorLayer and swaps between its `cm-blink`/`cm-blink2` keyframes to
+    // restart the phase every time the cursor moves (so it sits solid while you
+    // type). Adding an animation here beats against that one, and redefining
+    // `@keyframes cm-blink` hijacks half of the pair — the blink pattern then
+    // changes on every cursor move, which reads as random flickering.
     ".cm-cursor, .cm-dropCursor": {
         borderLeft: "2px solid var(--accent)",
         marginLeft: "-1px",
     },
-    "&.cm-focused .cm-cursor": { animation: "cm-blink 1.06s steps(1) infinite" },
-    "@keyframes cm-blink": { "0%, 49%": { opacity: 1 }, "50%, 100%": { opacity: 0 } },
 
     "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
         backgroundColor: "var(--accent-soft)",
