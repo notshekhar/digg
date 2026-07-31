@@ -33,7 +33,14 @@ export interface ContainerSpec {
         limits?: Record<string, string>;
     };
     volumeMounts?: { name?: string; mountPath?: string; readOnly?: boolean }[];
-    env?: { name?: string }[];
+    env?: {
+        name?: string;
+        valueFrom?: {
+            configMapKeyRef?: { name?: string; key?: string };
+            secretKeyRef?: { name?: string; key?: string };
+        };
+    }[];
+    envFrom?: { prefix?: string; configMapRef?: { name?: string }; secretRef?: { name?: string } }[];
 }
 
 /** The pod spec of a pod, or of a workload's pod template. */

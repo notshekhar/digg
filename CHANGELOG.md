@@ -1,5 +1,45 @@
 # Changelog
 
+## v1.5.0
+
+- **The names in a workload's spec are links now.** A Deployment's YAML is full
+  of pointers — the ConfigMap a volume mounts, the Secret one env var reads a
+  single key out of, the claim a StatefulSet writes to — and following one used
+  to mean reading the manifest, holding a name in your head and going to find it
+  in another list. Pods and workloads grow a **References** group instead, with
+  every ConfigMap, Secret and volume claim the spec names, each one a click away
+  from its own page. Every site the API server resolves is walked, not just the
+  obvious two: `projected` sources, `envFrom`, `env[].valueFrom`,
+  `imagePullSecrets` and the CSI and in-tree driver `secretRef`s. A name reached
+  more than once appears once, carrying where it was reached from — `volume
+  config, envFrom in app` — because which of six ConfigMaps a container actually
+  reads, and whether as a file or an env var, is the question the group exists
+  to answer. Workloads also link their service account and priority class; a pod
+  already showed the first and now links the second. A spec that names nothing
+  gets no group rather than a heading over three dashes.
+- **The log pane reads levels instead of guessing at them.** It used to scan
+  each line for words: anything containing "failed" was an error, so
+  `INFO reconcile complete: 0 failed` painted the pane red and a real error
+  stopped standing out. Levels now come from where loggers actually write them
+  — klog's `E0725` letter, a JSON `level` field (including pino's numeric
+  levels), a logfmt `level=`, a bracketed `[error]` or a shouted `ERROR` near
+  the head of the line — and only fall back to keywords for markers that are
+  never prose, like `panic:` and `Traceback`. A stack frame with no level of
+  its own stays with the error above it.
+- **Levels are shown, not just tinted.** Each line gets a severity stripe and a
+  fixed-width level tag, so every message starts at the same column no matter
+  what shape the line arrived in. Timestamps, keys, quoted values, URLs, IPs
+  and numbers are coloured quietly on top. Error and warn lines carry a wash;
+  the message text itself stays at reading contrast, because a pane where every
+  error line is red is a pane where the error is the least legible text on it.
+- **Filter by level**, with error and warning counts in the bar that are
+  themselves the filter for that level. Search highlighting composes with the
+  token colouring rather than replacing it, and a filtered pane says how many
+  of how many lines it is showing.
+- Rows are keyed by a sequence id and parsed once on arrival, so trimming the
+  head of a chatty pod's buffer no longer re-renders — or re-colours — every
+  line still on screen.
+
 ## v1.4.2
 
 - **The download shows the ■■■･･･ bar** that hehe, loop and markdown install

@@ -33,6 +33,8 @@ export interface Ref {
     kind: string;
     name: string;
     ns?: string;
+    /** How the spec reaches it — `volume config`, `env DB_PASS`, `envFrom in api`. */
+    via?: string;
 }
 
 export interface Chip {
@@ -47,6 +49,8 @@ export interface Fact {
     text?: string;
     tone?: Tone;
     ref?: Ref;
+    /** Several links under one label — the ConfigMaps a spec mounts, say. */
+    refs?: Ref[];
     chips?: Chip[];
     items?: string[];
     /** Span the full width of the group (labels, annotations, tolerations). */
@@ -232,6 +236,145 @@ function schedulingGroup(spec: Record<string, unknown>): FactGroup {
             { label: "Tolerations", items: tolerationLines(spec), wide: true },
         ],
     };
+}
+
+/* -- references ------------------------------------------------------------ */
+
+/**
+ * The objects a pod spec names, turned into links.
+ *
+ * A workload's YAML is full of names that are really pointers — the ConfigMap a
+ * volume mounts, the Secret one env var reads a single key out of, the claim a
+ * StatefulSet writes to — and following one by hand means reading the manifest,
+ * holding a name in your head, and going to find it in another list. They are
+ * collected here instead so the page you are already on is the way to the
+ * objects it depends on.
+ *
+ * Every site the API server itself resolves is walked, not just the obvious
+ * two: `projected` sources hide ConfigMaps behind another level, `envFrom`
+ * names one without ever naming a key, and the CSI and in-tree drivers keep
+ * their credentials in a `secretRef` of their own. Missing one of those is
+ * worse than showing none, because a group that looks complete and is not
+ * teaches you to trust it.
+ *
+ * A name reached more than once appears once, carrying *where* it was reached
+ * from: "which of these six ConfigMaps is this container actually reading, and
+ * as a file or as an env var" is the question the group exists to answer, and a
+ * bare list of names cannot.
+ */
+
+interface Volume {
+    name?: string;
+    configMap?: { name?: string };
+    secret?: { secretName?: string };
+    persistentVolumeClaim?: { claimName?: string };
+    projected?: { sources?: { configMap?: { name?: string }; secret?: { name?: string } }[] };
+    csi?: { nodePublishSecretRef?: { name?: string } };
+    azureFile?: { secretName?: string };
+}
+
+/** In-tree drivers that hang a plain `secretRef` off themselves. */
+const SECRET_REF_DRIVERS = ["cephfs", "iscsi", "rbd", "scaleIO", "storageos", "flexVolume"];
+
+const CONFIGMAPS = "configmaps";
+const SECRETS = "secrets";
+const PVCS = "persistentvolumeclaims";
+
+/** Three reasons is a hint; ten is the wall of YAML the group replaces. */
+function summarizeVia(vias: string[]): string {
+    return vias.length <= 3 ? vias.join(", ") : `${vias.slice(0, 2).join(", ")} +${vias.length - 2} more`;
+}
+
+class RefSet {
+    private found = new Map<string, { kind: string; name: string; vias: string[] }>();
+
+    add(kind: string, name: string | undefined, via: string) {
+        if (!name) return;
+        const key = `${kind}/${name}`;
+        const at = this.found.get(key);
+        if (!at) this.found.set(key, { kind, name, vias: [via] });
+        else if (!at.vias.includes(via)) at.vias.push(via);
+    }
+
+    of(kind: string, ns?: string): Ref[] {
+        return [...this.found.values()]
+            .filter((r) => r.kind === kind)
+            .map((r) => ({ kind: r.kind, name: r.name, ns, via: summarizeVia(r.vias) }));
+    }
+}
+
+/** Walk a pod spec and collect every object it names. Pure. */
+export function specRefs(spec: Record<string, unknown>): RefSet {
+    const refs = new RefSet();
+
+    for (const v of (spec.volumes ?? []) as Volume[]) {
+        if (!v) continue;
+        const where = `volume ${v.name ?? "?"}`;
+        refs.add(CONFIGMAPS, v.configMap?.name, where);
+        refs.add(SECRETS, v.secret?.secretName, where);
+        refs.add(SECRETS, v.azureFile?.secretName, where);
+        refs.add(SECRETS, v.csi?.nodePublishSecretRef?.name, where);
+        refs.add(PVCS, v.persistentVolumeClaim?.claimName, where);
+        for (const s of v.projected?.sources ?? []) {
+            refs.add(CONFIGMAPS, s?.configMap?.name, `projected ${v.name ?? "?"}`);
+            refs.add(SECRETS, s?.secret?.name, `projected ${v.name ?? "?"}`);
+        }
+        const driver = v as unknown as Record<string, { secretRef?: { name?: string } } | undefined>;
+        for (const d of SECRET_REF_DRIVERS) refs.add(SECRETS, driver[d]?.secretRef?.name, where);
+    }
+
+    for (const p of (spec.imagePullSecrets ?? []) as { name?: string }[]) {
+        refs.add(SECRETS, p?.name, "image pull");
+    }
+
+    const containers = [
+        ...((spec.initContainers ?? []) as ContainerSpec[]),
+        ...((spec.containers ?? []) as ContainerSpec[]),
+    ];
+    for (const c of containers) {
+        if (!c) continue;
+        const who = c.name ?? "?";
+        for (const e of c.envFrom ?? []) {
+            refs.add(CONFIGMAPS, e?.configMapRef?.name, `envFrom in ${who}`);
+            refs.add(SECRETS, e?.secretRef?.name, `envFrom in ${who}`);
+        }
+        for (const e of c.env ?? []) {
+            if (!e?.valueFrom) continue;
+            refs.add(CONFIGMAPS, e.valueFrom.configMapKeyRef?.name, `env ${e.name ?? "?"}`);
+            refs.add(SECRETS, e.valueFrom.secretKeyRef?.name, `env ${e.name ?? "?"}`);
+        }
+    }
+
+    return refs;
+}
+
+const REF_LABELS: [string, string][] = [
+    [CONFIGMAPS, "ConfigMaps"],
+    [SECRETS, "Secrets"],
+    [PVCS, "Volume Claims"],
+];
+
+/**
+ * The References group, or null when the spec names nothing — three empty
+ * dashes under a heading is worse than no heading.
+ *
+ * `identity` adds the service account and priority class, which a pod already
+ * shows in its own summary and a workload has nowhere else to put.
+ */
+export function referencesGroup(spec: Record<string, unknown>, ns?: string, identity = false): FactGroup | null {
+    const refs = specRefs(spec);
+    const facts: Fact[] = [];
+    for (const [kind, label] of REF_LABELS) {
+        const list = refs.of(kind, ns);
+        if (list.length) facts.push({ label, refs: list, wide: true });
+    }
+    if (identity) {
+        const sa = (spec.serviceAccountName ?? spec.serviceAccount) as string | undefined;
+        if (sa) facts.push({ label: "Service Account", text: sa, ref: { kind: "serviceaccounts", name: sa, ns } });
+        const pc = spec.priorityClassName as string | undefined;
+        if (pc) facts.push({ label: "Priority Class", text: pc, ref: { kind: "priorityclasses", name: pc } });
+    }
+    return facts.length ? { title: "References", facts } : null;
 }
 
 function portsText(c: ContainerSpec): string {
@@ -434,9 +577,12 @@ export function workloadView(
     counts.rows = pods.map((p) => podLine(p, metrics));
     const header = headerGroup(obj);
     header.facts.splice(2, 0, { label: "Selector", chips: selectorChips(obj) });
+    // References sit above Scheduling: what a workload mounts is asked about far
+    // more often than the affinity rules that placed it.
+    const refs = referencesGroup(spec, obj.metadata?.namespace, true);
     return {
         header,
-        groups: [strategyGroup(obj, kindName), schedulingGroup(spec)],
+        groups: [strategyGroup(obj, kindName), ...(refs ? [refs] : []), schedulingGroup(spec)],
         containers: workloadContainerViews(obj, pods, metrics),
         containersNote: pods.length > 1 ? `summed over ${pods.length} pods` : undefined,
         pods: counts,
@@ -452,6 +598,8 @@ export function podView(pod: K8sObject, metrics: MetricsView): DetailView {
     const sa = (spec.serviceAccountName as string | undefined) ?? (spec.serviceAccount as string | undefined) ?? "";
     const ns = pod.metadata?.namespace;
     const scheduling = schedulingGroup(spec);
+    // identity=false: the summary above already links the service account.
+    const refs = referencesGroup(spec, ns);
     return {
         header: headerGroup(pod),
         groups: [
@@ -465,10 +613,15 @@ export function podView(pod: K8sObject, metrics: MetricsView): DetailView {
                     { label: "Host IP", text: dash(status?.hostIP) },
                     { label: "Service Account", text: dash(sa), ref: sa ? { kind: "serviceaccounts", name: sa, ns } : undefined },
                     { label: "Quality of Service", text: dash(status?.qosClass) },
-                    { label: "Priority Class", text: dash(spec.priorityClassName as string | undefined) },
+                    {
+                        label: "Priority Class",
+                        text: dash(spec.priorityClassName as string | undefined),
+                        ref: spec.priorityClassName ? { kind: "priorityclasses", name: spec.priorityClassName as string } : undefined,
+                    },
                     { label: "Restart Policy", text: dash(spec.restartPolicy as string | undefined) },
                 ],
             },
+            ...(refs ? [refs] : []),
             scheduling,
         ],
         containers: podContainerViews(pod, metrics),

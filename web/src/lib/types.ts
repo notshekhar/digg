@@ -125,6 +125,8 @@ export interface Fact {
     text?: string;
     tone?: Tone;
     ref?: ResourceRef;
+    /** Several links under one label — the ConfigMaps a spec mounts, say. */
+    refs?: ResourceRef[];
     chips?: Chip[];
     items?: string[];
     wide?: boolean;
@@ -264,4 +266,6 @@ export interface ResourceRef {
     kind: string;
     name: string;
     ns?: string;
+    /** How the spec reaches it — `volume config`, `env DB_PASS`. Display only. */
+    via?: string;
 }

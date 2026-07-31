@@ -6,6 +6,7 @@ import {
     nodeAffinityLines,
     podLine,
     podView,
+    referencesGroup,
     tolerationLines,
     topologySpreadLines,
     workloadView,
@@ -211,5 +212,124 @@ describe("workloadView", () => {
         const single = workloadView(deployment, "deployments", [POD], NO_METRICS);
         expect(single.containersNote).toBeUndefined();
         expect(single.containers[0]!.cpu.requests).toBeCloseTo(0.025);
+    });
+});
+
+describe("references", () => {
+    const SPEC = {
+        serviceAccountName: "web-sa",
+        priorityClassName: "high",
+        imagePullSecrets: [{ name: "registry-cred" }],
+        volumes: [
+            { name: "config", configMap: { name: "web-config" } },
+            { name: "tls", secret: { secretName: "web-tls" } },
+            { name: "data", persistentVolumeClaim: { claimName: "web-data" } },
+            {
+                name: "bundle",
+                projected: { sources: [{ configMap: { name: "ca-bundle" } }, { secret: { name: "web-tls" } }] },
+            },
+            { name: "vault", csi: { nodePublishSecretRef: { name: "csi-cred" } } },
+            { name: "share", cephfs: { secretRef: { name: "ceph-key" } } },
+            { name: "scratch", emptyDir: {} },
+        ],
+        containers: [
+            {
+                name: "app",
+                envFrom: [{ configMapRef: { name: "web-config" } }, { secretRef: { name: "app-env" } }],
+                env: [
+                    { name: "PLAIN", value: "x" },
+                    { name: "DB_PASS", valueFrom: { secretKeyRef: { name: "db", key: "password" } } },
+                    { name: "DB_HOST", valueFrom: { configMapKeyRef: { name: "db-conf", key: "host" } } },
+                ],
+            },
+        ],
+        initContainers: [{ name: "migrate", envFrom: [{ secretRef: { name: "db" } }] }],
+    };
+
+    const group = referencesGroup(SPEC, "demo", true)!;
+    const refs = (label: string) => fact(group, label)?.refs ?? [];
+    const names = (label: string) => refs(label).map((r) => r.name).sort();
+
+    test("collects configmaps from volumes, projections, envFrom and env", () => {
+        expect(names("ConfigMaps")).toEqual(["ca-bundle", "db-conf", "web-config"]);
+    });
+
+    test("collects secrets from every carrier the API server resolves", () => {
+        expect(names("Secrets")).toEqual(["app-env", "ceph-key", "csi-cred", "db", "registry-cred", "web-tls"]);
+    });
+
+    test("claims are their own kind, and volumes with no reference are skipped", () => {
+        expect(refs("Volume Claims")).toEqual([
+            { kind: "persistentvolumeclaims", name: "web-data", ns: "demo", via: "volume data" },
+        ]);
+    });
+
+    test("refs are namespaced so a link lands in the right namespace", () => {
+        expect(refs("ConfigMaps").every((r) => r.ns === "demo")).toBe(true);
+    });
+
+    test("a name reached twice appears once, carrying both routes", () => {
+        const cm = refs("ConfigMaps").find((r) => r.name === "web-config");
+        expect(cm?.via).toBe("volume config, envFrom in app");
+        const tls = refs("Secrets").find((r) => r.name === "web-tls");
+        expect(tls?.via).toBe("volume tls, projected bundle");
+    });
+
+    test("env references name the variable, init containers name themselves", () => {
+        expect(refs("Secrets").find((r) => r.name === "db")?.via).toBe("envFrom in migrate, env DB_PASS");
+        expect(refs("ConfigMaps").find((r) => r.name === "db-conf")?.via).toBe("env DB_HOST");
+    });
+
+    test("many routes to one name are summarized rather than listed", () => {
+        const many = referencesGroup(
+            {
+                containers: [
+                    {
+                        name: "app",
+                        env: ["A", "B", "C", "D", "E"].map((n) => ({
+                            name: n,
+                            valueFrom: { secretKeyRef: { name: "big", key: n } },
+                        })),
+                    },
+                ],
+            },
+            "demo",
+        )!;
+        expect(fact(many, "Secrets")?.refs?.[0]?.via).toBe("env A, env B +3 more");
+    });
+
+    test("identity adds links the workload has nowhere else to show", () => {
+        expect(fact(group, "Service Account")?.ref).toEqual({ kind: "serviceaccounts", name: "web-sa", ns: "demo" });
+        // Cluster-scoped: a namespace on this link would 404.
+        expect(fact(group, "Priority Class")?.ref).toEqual({ kind: "priorityclasses", name: "high" });
+        expect(fact(referencesGroup(SPEC, "demo")!, "Service Account")).toBeUndefined();
+    });
+
+    test("a spec that names nothing gets no group at all", () => {
+        expect(referencesGroup({ containers: [{ name: "app", image: "x" }] })).toBeNull();
+        expect(referencesGroup({})).toBeNull();
+    });
+
+    const deploy = (podSpec: Record<string, unknown>): K8sObject => ({
+        kind: "Deployment",
+        metadata: { name: "web", namespace: "demo", creationTimestamp: iso(10) },
+        spec: { replicas: 1, template: { spec: podSpec } },
+        status: {},
+    });
+
+    test("the workload page shows references above scheduling, and skips the group when empty", () => {
+        const bare = workloadView(deploy({ containers: [{ name: "app", image: "x" }] }), "deployments", [], NO_METRICS);
+        expect(bare.groups.map((g) => g.title)).toEqual(["Rollout", "Scheduling"]);
+
+        const rich = workloadView(deploy(SPEC), "deployments", [], NO_METRICS);
+        expect(rich.groups.map((g) => g.title)).toEqual(["Rollout", "References", "Scheduling"]);
+    });
+
+    test("a pod reads its own template's references and links its priority class", () => {
+        const pod = { kind: "Pod", metadata: { name: "web-1", namespace: "demo" }, spec: SPEC } as K8sObject;
+        const view = podView(pod, NO_METRICS);
+        const group = view.groups.find((g) => g.title === "References")!;
+        expect(group.facts.map((f) => f.label)).toEqual(["ConfigMaps", "Secrets", "Volume Claims"]);
+        expect(findFact(view.groups, "Priority Class")?.ref).toEqual({ kind: "priorityclasses", name: "high" });
     });
 });

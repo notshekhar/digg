@@ -89,6 +89,51 @@
     color: var(--bad);
 }
 
+/* A referenced object: chip-shaped like a label so the group scans as a set,
+   but accent-coloured and raised on hover so it reads as somewhere to go. */
+.reflinks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+.reflink {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 1px 6px;
+    background: var(--bg-sunk);
+    border: 1px solid var(--line-soft);
+    font-size: 11px;
+    max-width: 100%;
+    cursor: pointer;
+    text-align: left;
+}
+.reflink:hover {
+    border-color: var(--accent);
+    background: var(--bg);
+}
+.reflink-name {
+    color: var(--accent);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 320px;
+}
+.reflink:hover .reflink-name {
+    color: var(--accent-strong);
+    text-decoration: underline;
+}
+/* The "why" is a footnote, not a second name — it must never out-weigh the
+   thing it qualifies, and it is the first text dropped when space runs out. */
+.reflink-via {
+    color: var(--fg-faint);
+    font-size: 10px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 220px;
+}
+
 .factlines {
     display: flex;
     flex-direction: column;

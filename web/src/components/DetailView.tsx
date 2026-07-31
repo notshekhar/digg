@@ -57,6 +57,28 @@ const cpuText = (n: number | null) => (n === null ? "—" : formatCpu(n));
 const memText = (n: number | null) => (n === null ? "—" : formatBytes(n));
 
 function FactValue({ fact, onOpen }: { fact: Fact; onOpen: (ref: ResourceRef) => void }) {
+    // Each ref carries where the spec reached it from, set beside the name
+    // rather than hidden in a tooltip: with six ConfigMaps under one label, the
+    // one you want is identified by "env DB_HOST", not by its name.
+    if (fact.refs) {
+        if (!fact.refs.length) return <span className="faint">-</span>;
+        return (
+            <span className="reflinks">
+                {fact.refs.map((r, i) => (
+                    <button
+                        type="button"
+                        className="reflink"
+                        key={`${r.kind}/${r.name}-${i}`}
+                        title={`${r.kind}/${r.name}${r.via ? ` — ${r.via}` : ""}`}
+                        onClick={() => onOpen({ kind: r.kind, name: r.name, ns: r.ns })}
+                    >
+                        <span className="reflink-name mono">{r.name}</span>
+                        {r.via ? <span className="reflink-via mono">{r.via}</span> : null}
+                    </button>
+                ))}
+            </span>
+        );
+    }
     if (fact.chips) {
         if (!fact.chips.length) return <span className="faint">-</span>;
         return (
