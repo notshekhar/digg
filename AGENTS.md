@@ -1,34 +1,42 @@
 # digg — notes for agents
 
-A Kubernetes cockpit in the browser over a kubectl-shelling core. There is no
-TUI any more — it was removed 2026-07-25 and `digg` now means `digg serve`.
+A Kubernetes cockpit in the browser. **A Go program since v2.0.0** — it reads
+your kubeconfig and talks to the API server through client-go, so there is no
+kubectl to shell out to and no TUI (that went in v1.0.0). `digg` and
+`digg serve` are the same command.
 
 ## Layout
 
 | path | what |
 |------|------|
-| `src/kubectl.ts` | every kubectl call, and the read paths that skip it. |
-| `src/proxy.ts` | one long-lived `kubectl proxy` per context, on a unix socket. |
-| `src/apipath.ts` | REST paths from discovery coordinates. Pure. |
-| `src/api-watch.ts` | the watch over the API (resumable); `watch-source.ts` picks it or kubectl. |
-| `src/format.ts` | `KINDS` — the curated kind table: columns + row extraction. |
-| `src/details.ts` | per-kind detail models (which related objects a kind shows). |
-| `src/detail-view.ts` | the RICH page model (pods, workloads, nodes): fact groups, container cards, pod lines. Pure. |
-| `src/usage.ts` | requests/limits/usage arithmetic + selector matching. Pure. |
-| `examples/` | sample manifests (ingress) for poking at the UI. |
-| `src/serve.ts` | `digg serve`: Bun.serve, token guard, WebSocket wiring. |
-| `src/web/` | the web backend — `api.ts` (routes), `catalog.ts` (grouped kinds), `actions.ts` (writes), `overview.ts`, `detail.ts` (rich page + revisions), `gauges.ts` (table usage columns), `forwards.ts`, `exec.ts`, `page.ts`. |
-| `src/web/bundle.ts` | **generated** — the built browser UI as one HTML string. Committed. |
-| `src/pty.ts` | openpty via bun:ffi, for browser shells. |
+| `src/cmd/digg/main.go` | argument parsing, signals, `digg update`. |
+| `src/internal/kube/client.go` | one `Cluster` per context, cached forever: rest.Config, typed/dynamic/metrics clients, discovery, RESTMapper. |
+| `src/internal/kube/resources.go` | list/get/apply/patch/delete/scale/rollout — every read and write against the API. |
+| `src/internal/kube/watch.go` | SharedIndexInformers, one per (kind, namespace), refcounted; `CachedList`/`ListCached` answer reads out of a warm store. |
+| `src/internal/kube/cache.go` | TTL + single-flight memo, used by metrics. |
+| `src/internal/kube/{metrics,logs,exec,forwards,events,discovery,drain,pty}.go` | metrics.k8s.io, log streams, exec/attach, port-forwards, events, discovery, drain, ptys. |
+| `src/internal/model/format.go` | `Kinds` — the curated kind table: columns + row extraction. Pure. |
+| `src/internal/model/details.go` | per-kind detail models (which related objects a kind shows). Pure. |
+| `src/internal/model/detailview.go` | the RICH page model (pods, workloads, nodes): fact groups, container cards, pod lines. Pure. |
+| `src/internal/model/{usage,quantity,secretyaml,obj}.go` | requests/limits arithmetic, quantity parsing, ConfigMap/Secret decoding, object helpers. Pure. |
+| `src/internal/server/server.go` | `digg serve`: routes, the token guard, the listener. |
+| `src/internal/server/` | the web backend — `api.go` (routes), `catalog.go` (grouped kinds), `actions.go` (writes), `overview.go`, `detail.go`, `gauges.go` (table usage columns), `live.go` (watch → deltas), `rows.go`, `sockets.go`, `page.go`. |
+| `src/internal/server/webdist/index.html` | **generated** — the built browser UI, `go:embed`ed. Committed. |
+| `src/internal/{settings,update}/` | `~/.digg/settings.json`, and self-update. |
 | `web/` | the browser UI source: React + Vite + TypeScript, no UI library. |
+| `examples/` | sample manifests (ingress) for poking at the UI. |
+
+Everything under `model/` is pure and has tests; everything that talks to a
+cluster lives in `kube/`. Keep it that way — it is why the model has real unit
+tests and the cluster layer only has live ones that skip.
 
 ## Web UI shape
 
-Path routing (`web/src/lib/router.ts`) over real paths — `digg serve` returns
-the app for every non-`/api` GET, so `/k/pods/demo/api-7d9f` is a deep link.
-The query string belongs to **nuqs** (`web/src/lib/query.ts`): namespace
-selection, table filter, detail tab and log container all live there, so a
-reload or a pasted URL restores the screen. Never put those in component state.
+Path routing (`web/src/lib/router.ts`) over real paths — digg returns the app
+for every non-`/api` GET, so `/k/pods/demo/api-7d9f` is a deep link. The query
+string belongs to **nuqs** (`web/src/lib/query.ts`): namespace selection, table
+filter, detail tab and log container all live there, so a reload or a pasted URL
+restores the screen. Never put those in component state.
 
 Global shortcuts are ⌘ chords ONLY (`lib/hooks.ts` ignores un-modified keys) —
 bare letters fire while someone is typing in a filter, an editor or a shell.
@@ -39,53 +47,74 @@ Panes stay mounted while hidden — unmounting an xterm kills the process.
 
 ## The rule that bites
 
-`src/web/bundle.ts` is a build artefact that is committed, so a clean checkout
-needs no node toolchain. **After any change under `web/src`, run
-`bun run build:web` and commit both sides.** `bun run build` (the binary) refuses to
-run when the bundle's recorded `SOURCE_HASH` does not match the working tree.
-The check is on content, not mtimes — a git checkout writes files in arbitrary
-order and a timestamp check would fail at random on CI.
+`src/internal/server/webdist/index.html` is a build artefact that is committed,
+so a clean checkout builds with the Go toolchain alone. **After any change under
+`web/src`, run `bun run build:web` from the repo root and commit both sides.**
+CI checks it with `bun web/scripts/source-hash.ts --check`, which compares a
+hash of the sources against the one recorded at build time — content, not
+mtimes, because a git checkout writes files in arbitrary order.
 
-## Reads go through a proxy, writes do not
+## Waiting is a designed state
 
-Every read used to be its own kubectl, and a process re-does the kubeconfig
-parse, the **exec credential plugin** (`aws eks get-token`, gcloud, oidc) and
-the TLS handshake before it asks anything: measured, five kubectl calls run the
-exec plugin five times, five requests through one proxy run it once. So
-`src/proxy.ts` starts ONE `kubectl proxy` per context, on a **unix socket** in
-~/.digg (`srwx------`, no TCP port — that is what makes it safe where the
-localhost port digg rejected in v1.1.0 was not), started with `--reject-methods`
-so nothing can write through it. Local minikube: ~50ms per kubectl vs ~3ms per
-proxied request.
+Every loading state goes through `useDelayed` (`web/src/lib/hooks.ts`) and then
+draws a skeleton from `components/Skeleton.tsx`. Two rules:
 
-kubectl still does the authenticating, so exec plugins and client certs are
-untouched. **Every mutation is still its own kubectl** — apply, patch, scale,
-delete, drain, exec, port-forward — and so are `describe` and `-o yaml`, whose
-output is kubectl's, not the API's. If the proxy cannot start, every read falls
-back to the kubectl argv it always used; `DIGG_NO_PROXY=1` forces that path.
+- **Nothing appears for the first 160ms.** Most reads answer in single-digit
+  milliseconds, and a placeholder painted for one frame is worse than none.
+- **A skeleton draws the geometry of what is coming, and fakes nothing already
+  known.** A table keeps its real header row and its real column widths (the
+  kind catalog carries `columns` before any row is fetched); a detail page keeps
+  its header and tabs; the overview keeps its context name. The data replaces
+  bars in place rather than replacing a screen.
+
+Do not add a bare spinner to a screen. The one that remains is the boot note,
+where there is genuinely nothing yet to be shaped like.
+
+## Speed: one client, warm stores, no serial round trips
+
+There is no kubectl and no proxy any more; `kube.For(context)` builds one
+authenticated client per context and keeps it for the life of the process, so
+an exec credential plugin (`aws eks get-token`, gcloud, oidc) and a TLS
+handshake happen once, not per request. Four rules keep it fast:
+
+1. **Reads list with `resourceVersion=0`** (`ListOptions.Quorum` opts out),
+   which the apiserver answers from its own watch cache instead of a quorum read
+   through etcd. The tables are watch-fed and correct themselves, so the few
+   milliseconds of possible lag are not worth a slower read.
+2. **A warm informer IS the answer.** `ListCached` serves any read a running,
+   synced watch already holds — including a namespaced or label-selected slice
+   of an all-namespaces store — for zero API calls. Measured on minikube: 18µs
+   against 8.5ms. Every read-only caller in `server/` uses it.
+3. **Streams outlive their readers by `idleGrace` (5 min)**, which is what makes
+   rule 2 pay: navigate away and back and the table is already in memory. This
+   is the store-lifetime trick Lens gets from keeping its KubeObjectStores alive.
+4. **Independent reads run concurrently.** A detail page builds its section and
+   its rich view in parallel; usage columns fetch metrics and pods in parallel;
+   the overview fans out entirely. Anything that adds a second serial round trip
+   to a page build is a regression.
+
+Metrics are the exception to everything: `metrics.k8s.io` samples every 60s and
+carries `window: 1m`, so `kube/cache.go` holds answers for 10s and collapses
+concurrent misses into one call.
 
 ## Live data
 
-`src/web/live.ts` refcounts one watch per (context, kind, namespace) across
-sessions and turns events into row deltas on `/api/watch` (same token guard as
-the rest). `src/watch-source.ts` decides what that watch IS: the API watch
-(`src/api-watch.ts`) through the proxy, which lists once with
-`?resourceVersion=0` and then resumes from its resourceVersion forever — a
-closed stream costs one request, not a re-list — falling back once, per store,
-to `src/watch.ts` (`kubectl get --watch`) when there is no proxy, no such kind
-in discovery, or the API refuses the watch.
+`server/live.go` turns informer events into row deltas on `/api/watch` (same
+token guard as the rest); `kube/watch.go` owns one SharedIndexInformer per
+(context, kind, namespace) shared across every socket. The informer gives what
+`kubectl --watch` could not: a resourceVersion to resume from, and a `Synced`
+marker for "the initial list is done" — so the 250ms settle heuristic the Bun
+build needed is gone.
+
 The client (`web/src/lib/live.ts` + `live-data.ts`) prefers the socket and
 **falls back to polling** whenever it cannot serve — unwatchable kind, dropped
 connection, paused session — keeping the last rows on screen while it switches.
+It gives the socket a 300ms head start (`pending`) before polling, so opening a
+table does not ask the cluster for the same collection twice.
 
 Rules that matter here:
-- `src/web/rows.ts` builds every row. Both `/api/list` and the watch use it, so
-  a streamed row and a polled row are byte-identical; two builders would flicker.
-- On the kubectl path only: kubectl gives no resourceVersion and no bookmark, so
-  a reconnect re-lists, and the initial burst is buffered and emitted as ONE
-  snapshot (quiet for 250ms, or 2.5s hard stop). The API path needs neither
-  trick — the list ends when the list ends, and bookmarks keep the version
-  fresh so a reconnect resumes.
+- `server/rows.go` builds every row. Both `/api/list` and the watch use it, so a
+  streamed row and a polled row are byte-identical; two builders would flicker.
 - **Metrics are not watchable** (`metrics.k8s.io` is get/list only) — usage bars
   refresh on a 15s timer inside the session, sent as deltas.
 - A kind whose watch fails permanently (aggregated API, RBAC) must report
@@ -93,47 +122,51 @@ Rules that matter here:
 
 ## Detail pages: two tiers
 
-Every kind gets `src/details.ts` — a key/value summary plus one related table.
-Kinds in `RICH_KINDS` (pods, deployments, statefulsets, daemonsets, replicasets,
+Every kind gets `model/details.go` — a key/value summary plus one related table.
+Kinds in `RichKinds` (pods, deployments, statefulsets, daemonsets, replicasets,
 jobs, nodes) get a full model instead: identity card, fact groups, container
-cards with usage against requests/limits, and the pods they own.
-`/api/detail` returns `view` for those and `section: null`, so the two never
-render at once. Bars are **null-safe**: no metrics-server means a hatched bar,
-never a confident 0%.
+cards with usage against requests/limits, and the pods they own. `/api/detail`
+returns `view` for those and `section: null`, so the two never render at once.
+Bars are **null-safe**: no metrics-server means a hatched bar, never a confident
+0%.
 
 ## Adding a kind
 
-Add it to `KINDS` in `src/format.ts` (name = the kubectl plural, `columns` +
-`row()` mirroring `kubectl get`), then list it in the right group in
-`src/web/catalog.ts`. Uncurated kinds still work
-— they fall back to `genericKind()` and land under their API group.
+Add it to `Kinds` in `model/format.go` (name = the kubectl plural, `Columns` +
+`Row()` mirroring `kubectl get`), then list it in the right group in
+`server/catalog.go`. Uncurated kinds still work — they fall back to the generic
+kind and land under their API group.
 
 ## ConfigMaps and Secrets
 
-`GET /api/data` returns every entry decoded (`src/secret-yaml.ts:decodeEntry`
-flags binary values); `setData` in `src/web/actions.ts` writes a JSON merge
-patch. Secrets go through **`stringData`** so the API server does the base64 —
-encoding in the browser risks a silently-wrong secret. Deletion is `data: {key:
-null}`. Only changed keys are sent, so a save cannot clobber a field someone
-else edited.
+`GET /api/data` returns every entry decoded (`model.DecodeEntry` flags binary
+values); `setData` in `server/actions.go` writes a JSON merge patch. Secrets go
+through **`stringData`** so the API server does the base64 — encoding in the
+browser risks a silently-wrong secret. Deletion is `data: {key: null}`. Only
+changed keys are sent, so a save cannot clobber a field someone else edited.
 
 ## Adding an action
 
-One switch case in `src/web/actions.ts`, one entry in `resourceActions()` in
+One switch case in `server/actions.go`, one entry in `resourceActions()` in
 `web/src/lib/actions.tsx`. Destructive actions get a `Confirm`; irreversible
-ones (delete, drain) pass `confirmText` so the name must be typed.
+ones (delete, drain) pass `confirmText` so the name must be typed. Writes are
+never served from a cache and never take the `resourceVersion=0` shortcut.
 
 ## Security invariants
 
 - `digg serve` binds 127.0.0.1 and requires a per-run token on every `/api`
   request and every WebSocket. Localhost is not an access boundary — a hostile
   page can reach it, and WS handshakes ignore the same-origin policy.
-- Never add an endpoint that runs a command without going through the guard in
-  `serve.ts`.
+- Never add an endpoint that runs a command without going through `guard()` in
+  `server/server.go`.
 
 ## Testing
 
-`bun test` runs unit tests plus a live integration suite that spawns a real
-server. Cluster-dependent assertions print `↷ skipped` when no cluster answers
-rather than passing silently. Browser verification is done with headless Chrome
-over CDP against `digg serve`.
+`go test ./...` runs the pure model/settings/update tests plus live suites that
+**skip themselves** when no kubeconfig answers, so it stays green on a machine
+with no cluster. `cd web && bun run typecheck` covers the UI. CI also vets the
+Windows build, because the pty is split across `pty.go` and
+`pty_stub_windows.go` and a change to one can leave the other missing a symbol.
+Browser verification is done with headless Chrome over CDP — randomise the
+debugging port AND the user-data-dir per launch, or a second launch silently
+attaches to the Chrome already running and drives a stale page.

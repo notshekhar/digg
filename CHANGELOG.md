@@ -1,5 +1,42 @@
 # Changelog
 
+## v2.1.0
+
+- **Waiting looks like the thing you are waiting for.** Every screen used to
+  answer a slow read with a 10px spinning square in the top-left corner and a
+  line of text, and then replace it wholesale with a table — so a navigation was
+  a blank, a flash and a jump. Each screen now draws its own geometry instead: a
+  table keeps its real header row and its real column widths, because the kind
+  catalog carries the column names before the first row is fetched; a detail
+  page keeps its header, its tabs and its fact grid; the overview keeps its
+  context name and its stat row; YAML and describe keep an indented document.
+  The data lands in place of the placeholders rather than in place of a screen.
+- **And nothing at all appears for the first 160ms.** Most reads answer in
+  single-digit milliseconds, so the old spinner was usually a one-frame flash —
+  movement the eye registers and cannot read. Below the threshold the screen
+  simply does not change.
+- **Revisiting a table you have already opened costs the cluster nothing.** The
+  watch behind every table holds the whole collection in memory, and reads are
+  now answered from that store when one is running and synced — 18µs against
+  8.5ms on a local cluster, and a whole round trip against a remote one.
+  Streams are also kept for five minutes after the last reader rather than ten
+  seconds, which is what makes walking away and coming back free.
+- **Opening a table no longer asks the cluster for it twice.** The socket and
+  the polling fallback both fired on mount; the poll now waits 300ms for the
+  socket and is skipped entirely when the snapshot beats it.
+- **Reads come from the apiserver's watch cache** (`resourceVersion=0`, the same
+  thing every informer in Kubernetes does on its initial list) instead of a
+  quorum read through etcd. Writes and read-after-write paths are unchanged.
+- **Page builds stopped waiting in a queue.** A detail page built its section
+  and its rich view one after the other, and the usage columns fetched metrics
+  and then listed pods; each of those is now concurrent, which is most
+  noticeable on a cluster that is not on your laptop. Deployments list on
+  minikube: 27ms → 13ms.
+- **Metrics are fetched once per 10s, not once per question.** metrics-server
+  samples every 60s and its readings carry `window: 1m`, so the four calls one
+  navigation used to make returned identical numbers; concurrent misses now
+  collapse into a single upstream call.
+
 ## v2.0.0
 
 - **digg is a Go program now, and it no longer needs kubectl.** It reads your

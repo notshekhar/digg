@@ -164,6 +164,16 @@ function columnWidth(label: string, index: number): string {
     return index === 0 ? "minmax(160px, 2fr)" : "minmax(88px, 1fr)";
 }
 
+/**
+ * The grid template for a set of column labels: checkbox column, then one
+ * column per field. Exported so the loading skeleton (components/Skeleton.tsx)
+ * lays its placeholder rows out on exactly the same lines as the real table —
+ * if the two disagreed, the columns would visibly jump when the data landed.
+ */
+export function gridTemplate(columns: string[]): string {
+    return `28px ${columns.map((c, i) => columnWidth(c, i)).join(" ")}`;
+}
+
 export interface DataGridProps {
     columns: string[];
     rows: Row[];
@@ -353,7 +363,7 @@ export function DataGrid({
     // Widths are per-column because "Succeeded" truncating to "Succee…" in a
     // 70px status column is the difference between a table you can scan and one
     // you have to hover.
-    const template = `28px ${visibleCols.map((c, i) => columnWidth(c.label, i)).join(" ")}`;
+    const template = gridTemplate(visibleCols.map((c) => c.label));
 
     return (
         <div

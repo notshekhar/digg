@@ -8,10 +8,11 @@
  */
 
 import { Icon } from "../components/icons.tsx";
+import { OverviewSkeleton } from "../components/Skeleton.tsx";
 import { Badge, Empty, ErrorBox, Meter, Panel, Stat } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { formatBytes, formatCpu, ageFromIso } from "../lib/format.ts";
-import { usePolled } from "../lib/hooks.ts";
+import { useDelayed, usePolled } from "../lib/hooks.ts";
 import { navigate } from "../lib/router.ts";
 import { useApp } from "../lib/store.ts";
 import type { ResourceRef } from "../lib/types.ts";
@@ -20,14 +21,13 @@ import "./OverviewPage.css";
 export function OverviewPage({ onOpen }: { onOpen: (ref: ResourceRef, tab?: string) => void }) {
     const context = useApp((s) => s.context);
     const { data, error, initial } = usePolled(() => api.overview(context), [context], { enabled: Boolean(context) });
+    const waiting = useDelayed(!data && !error);
 
     if (error) return <ErrorBox error={error} />;
     if (!data) {
-        return (
-            <div className="page-loading">
-                <span className="spinner" /> Reading cluster…
-            </div>
-        );
+        // The overview asks the cluster several questions, so it is the one
+        // screen that is regularly slow enough to be worth drawing.
+        return waiting ? <OverviewSkeleton context={context} /> : null;
     }
 
     const t = data.totals;

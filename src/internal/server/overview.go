@@ -220,7 +220,7 @@ func BuildOverview(cl *kube.Cluster, clientVersion string) Overview {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if out, err := cl.List(kind, opts); err == nil {
+			if out, err := cl.ListCached(kind, opts); err == nil {
 				*dst = out
 			}
 		}()

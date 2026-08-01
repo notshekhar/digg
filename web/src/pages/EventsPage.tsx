@@ -9,10 +9,11 @@
 
 import { useMemo, useState } from "react";
 import { Icon } from "../components/icons.tsx";
+import { RowsSkeleton } from "../components/Skeleton.tsx";
 import { Badge, Empty, ErrorBox } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { ageFromIso, shortDate } from "../lib/format.ts";
-import { usePolled } from "../lib/hooks.ts";
+import { useDelayed, usePolled } from "../lib/hooks.ts";
 import { useApp } from "../lib/store.ts";
 import { useFilter, useNamespaces, nsParam } from "../lib/query.ts";
 import type { ResourceRef } from "../lib/types.ts";
@@ -45,6 +46,8 @@ export function EventsPage({ onOpen }: { onOpen: (ref: ResourceRef, tab?: string
         [context, nsForApi],
         { enabled: Boolean(context) },
     );
+
+    const waiting = useDelayed(initial && !data && !error);
 
     const rows = useMemo(() => {
         let out = data?.events ?? [];
@@ -93,10 +96,8 @@ export function EventsPage({ onOpen }: { onOpen: (ref: ResourceRef, tab?: string
 
             {error ? <ErrorBox error={error} /> : null}
 
-            {initial && !data ? (
-                <div className="page-loading">
-                    <span className="spinner" /> Reading events…
-                </div>
+            {waiting ? (
+                <RowsSkeleton />
             ) : rows.length === 0 ? (
                 <Empty
                     title={warningsOnly ? "No warnings" : "No events"}

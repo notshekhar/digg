@@ -43,6 +43,10 @@ type ListOptions struct {
 	ClusterScoped bool
 	LabelSelector string
 	FieldSelector string
+	// Quorum forces a read straight from etcd instead of the apiserver's watch
+	// cache. See List: browsing does not need it, reading back what you just
+	// wrote does.
+	Quorum bool
 }
 
 func ctxWithTimeout() (context.Context, context.CancelFunc) {
@@ -92,6 +96,14 @@ func (c *Cluster) resourceFor(kind, namespace string, clusterScoped bool) (dynam
 }
 
 // List is the port of listResources().
+//
+// Reads ask for resourceVersion=0, which the apiserver answers out of its own
+// watch cache instead of doing a quorum read through etcd — the same thing
+// every informer in Kubernetes does on its initial list, and what the Bun
+// build's api-watch.ts already did (`?resourceVersion=0`). The cost is that the
+// answer can lag the write path by a few milliseconds; the tables are watch-fed
+// and correct themselves on the next event, so a caller that genuinely needs
+// read-your-writes asks for Quorum instead.
 func (c *Cluster) List(kind string, opts ListOptions) ([]Obj, error) {
 	res, err := c.resourceFor(kind, opts.Namespace, opts.ClusterScoped)
 	if err != nil {
@@ -99,10 +111,14 @@ func (c *Cluster) List(kind string, opts ListOptions) ([]Obj, error) {
 	}
 	ctx, cancel := ctxWithTimeout()
 	defer cancel()
-	list, err := res.List(ctx, metav1.ListOptions{
+	lo := metav1.ListOptions{
 		LabelSelector: opts.LabelSelector,
 		FieldSelector: opts.FieldSelector,
-	})
+	}
+	if !opts.Quorum {
+		lo.ResourceVersion = "0"
+	}
+	list, err := res.List(ctx, lo)
 	if err != nil {
 		return nil, wrap(err)
 	}

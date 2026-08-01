@@ -8,6 +8,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/watch"
@@ -50,10 +51,16 @@ type WatchEvent struct {
 // Handler receives events for one subscription.
 type Handler func(WatchEvent)
 
-// idleGrace is how long a stream outlives its last reader, so navigating away
-// and back does not tear down and rebuild the informer. Matches the Bun build's
-// 10s.
-const idleGrace = 10 * time.Second
+// idleGrace is how long a stream outlives its last reader.
+//
+// The Bun build kept it at 10s, which covered flicking between two kinds and
+// nothing else — walk away for a minute and coming back re-listed the whole
+// collection. This is the store-lifetime question Lens answers by keeping its
+// KubeObjectStores alive for the whole cluster session, and it is most of why
+// Lens revisits feel instant. Five minutes is that behaviour without the
+// unbounded memory: a stream that nobody has looked at for five minutes is
+// worth its re-list, and one you keep coming back to costs nothing.
+const idleGrace = 5 * time.Minute
 
 type sharedWatch struct {
 	key      string
@@ -83,7 +90,7 @@ func (c *Cluster) Subscribe(kind, namespace string, h Handler) (func(), error) {
 	if !namespaced {
 		ns = ""
 	}
-	key := fmt.Sprintf("%s/%s/%s", gvr.String(), ns, boolStr(namespaced))
+	key := watchKey(gvr, ns, namespaced)
 
 	c.mu.Lock()
 	sw, ok := c.shared[key]
@@ -96,11 +103,97 @@ func (c *Cluster) Subscribe(kind, namespace string, h Handler) (func(), error) {
 	return sw.add(h), nil
 }
 
-func boolStr(b bool) string {
-	if b {
-		return "ns"
+func watchKey(gvr schema.GroupVersionResource, ns string, namespaced bool) string {
+	scope := "cluster"
+	if namespaced {
+		scope = "ns"
 	}
-	return "cluster"
+	return fmt.Sprintf("%s/%s/%s", gvr.String(), ns, scope)
+}
+
+// CachedList answers a list out of a running informer's store, if one is
+// already watching this collection and has finished its initial sync.
+//
+// This is the other half of the argument for keeping streams alive past their
+// last reader: a table you opened a minute ago is still in memory, complete and
+// continuously updated by its watch, so re-asking the apiserver for it is a
+// round trip for an answer we hold. It is also *fresher* than a list would be —
+// the store is fed by the watch, while a list can be served from a lagging
+// cache.
+//
+// A watch on every namespace can answer a single-namespace question by
+// filtering; the reverse is not true, and neither is a store that is still
+// syncing, so both say no and the caller lists.
+func (c *Cluster) CachedList(kind string, opts ListOptions) ([]Obj, bool) {
+	gvr, namespaced, err := c.Resolve(kind)
+	if err != nil {
+		return nil, false
+	}
+	// A field selector needs an index the store does not keep, and a caller who
+	// asked for a quorum read asked not to be given a cache.
+	if opts.FieldSelector != "" || opts.Quorum {
+		return nil, false
+	}
+	// A label selector, on the other hand, is a scan of a few thousand objects
+	// already in memory — cheaper than the round trip it replaces. This is what
+	// makes a workload's detail page free once its pods are being watched.
+	var selector labels.Selector
+	if opts.LabelSelector != "" {
+		sel, err := labels.Parse(opts.LabelSelector)
+		if err != nil {
+			return nil, false
+		}
+		selector = sel
+	}
+	ns := opts.Namespace
+	if !namespaced || opts.ClusterScoped {
+		ns = ""
+	}
+
+	c.mu.Lock()
+	sw, ok := c.shared[watchKey(gvr, ns, namespaced)]
+	filter := ""
+	if !ok && ns != "" {
+		sw, ok = c.shared[watchKey(gvr, "", namespaced)]
+		filter = ns
+	}
+	c.mu.Unlock()
+	if !ok {
+		return nil, false
+	}
+
+	sw.mu.Lock()
+	synced, failed := sw.synced, sw.failed
+	sw.mu.Unlock()
+	if !synced || failed != "" {
+		return nil, false
+	}
+
+	raw := sw.informer.GetStore().List()
+	out := make([]Obj, 0, len(raw))
+	for _, o := range raw {
+		u, ok := o.(*unstructured.Unstructured)
+		if !ok {
+			continue
+		}
+		if filter != "" && u.GetNamespace() != filter {
+			continue
+		}
+		if selector != nil && !selector.Matches(labels.Set(u.GetLabels())) {
+			continue
+		}
+		out = append(out, *u)
+	}
+	return out, true
+}
+
+// ListCached is List, answered from a running watch's store when there is one.
+// Every read-only caller that does not need read-your-writes should use it.
+func (c *Cluster) ListCached(kind string, opts ListOptions) ([]Obj, error) {
+	if items, ok := c.CachedList(kind, opts); ok {
+		return items, nil
+	}
+	return c.List(kind, opts)
 }
 
 func (c *Cluster) newSharedWatch(key string, gvr schema.GroupVersionResource, ns string) *sharedWatch {

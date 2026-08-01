@@ -79,6 +79,9 @@ type Cluster struct {
 	// informers are lazily created per (gvr, namespace); see watch.go.
 	mu     sync.Mutex
 	shared map[string]*sharedWatch
+
+	// metricsCache holds metrics.k8s.io answers for metricsTTL; see cache.go.
+	metricsCache *ttlCache
 }
 
 var (
@@ -143,14 +146,15 @@ func connect(context string) (*Cluster, error) {
 		restmapper.NewDeferredDiscoveryRESTMapper(cached), cached, func(string) {})
 
 	return &Cluster{
-		Context:   context,
-		Rest:      cfg,
-		Typed:     typed,
-		Dynamic:   dyn,
-		Metrics:   mc,
-		Discovery: cached,
-		Mapper:    mapper,
-		shared:    map[string]*sharedWatch{},
+		Context:      context,
+		Rest:         cfg,
+		Typed:        typed,
+		Dynamic:      dyn,
+		Metrics:      mc,
+		Discovery:    cached,
+		Mapper:       mapper,
+		shared:       map[string]*sharedWatch{},
+		metricsCache: newTTLCache(metricsTTL),
 	}, nil
 }
 

@@ -338,12 +338,17 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	if kind.ClusterScoped {
 		listNS = ""
 	}
-	items, err := cl.List(kind.Name, kube.ListOptions{
-		Namespace: listNS, ClusterScoped: kind.ClusterScoped,
-	})
-	if err != nil {
-		fail(w, err)
-		return
+	// If a watch is already holding this collection, that store IS the answer —
+	// complete, live, and already in memory. Only a cold kind costs a request.
+	opts := kube.ListOptions{Namespace: listNS, ClusterScoped: kind.ClusterScoped}
+	items, cached := cl.CachedList(kind.Name, opts)
+	if !cached {
+		var err error
+		items, err = cl.List(kind.Name, opts)
+		if err != nil {
+			fail(w, err)
+			return
+		}
 	}
 
 	usage := usageColumnsFor(cl, kind.Name, items, listNS)

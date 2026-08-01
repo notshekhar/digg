@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Icon } from "../components/icons.tsx";
 import { DetailViewPane } from "../components/DetailView.tsx";
+import { DetailSkeleton, RowsSkeleton, TextSkeleton } from "../components/Skeleton.tsx";
 import { Badge, CopyButton, ErrorBox, Facts, Menu, Tabs } from "../components/ui.tsx";
 import { LogPane } from "../components/LogPane.tsx";
 import { TextPane, YamlEditor } from "../components/YamlEditor.tsx";
@@ -21,7 +22,7 @@ import { DataTab } from "./DataTab.tsx";
 import { api } from "../lib/api.ts";
 import { act, minePorts, openForward, openScale, resourceActions } from "../lib/actions.tsx";
 import { ageFromIso, toneOf } from "../lib/format.ts";
-import { usePolled } from "../lib/hooks.ts";
+import { useDelayed, usePolled } from "../lib/hooks.ts";
 import { useEither, useLiveDetail } from "../lib/live-data.ts";
 import { useContainer, useTab } from "../lib/query.ts";
 import { goBack, navigate } from "../lib/router.ts";
@@ -65,7 +66,7 @@ export function DetailPage({
     const polled = usePolled(
         () => api.detail({ context, kind: target.kind, name: target.name, ns: target.ns }),
         [context, target.kind, target.name, target.ns],
-        { enabled: !stream.streaming },
+        { enabled: !stream.streaming && !stream.pending },
     );
     const { data, error } = useEither(stream.data, stream.streaming, polled);
 
@@ -259,13 +260,10 @@ function OverviewTab({
 }) {
     const [revealed, setRevealed] = useState<Record<string, string>>({});
     const context = getState().context;
+    const waiting = useDelayed(!data);
 
     if (!data) {
-        return (
-            <div className="page-loading">
-                <span className="spinner" /> Loading…
-            </div>
-        );
+        return waiting ? <DetailSkeleton /> : null;
     }
 
     const facts: [string, React.ReactNode][] = data.summary.map(([k, v]) => {
@@ -475,14 +473,11 @@ function RevisionsTab({ target, onOpen }: { target: ResourceRef; onOpen: (ref: R
         () => api.revisions({ context, kind: target.kind, name: target.name, ns: target.ns }),
         [context, target.kind, target.name, target.ns],
     );
+    const waiting = useDelayed(!data && !error);
 
     if (error) return <ErrorBox error={error} />;
     if (!data) {
-        return (
-            <div className="page-loading">
-                <span className="spinner" /> Reading revisions…
-            </div>
-        );
+        return waiting ? <RowsSkeleton rows={6} /> : null;
     }
     if (!data.revisions.length) {
         return <div className="detail-empty faint pad">no revision history for this workload</div>;
@@ -549,6 +544,7 @@ function YamlTab({ target }: { target: ResourceRef }) {
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const dirty = text !== null && buffer !== text;
+    const waiting = useDelayed(text === null && !error);
 
     useEffect(() => {
         let live = true;
@@ -575,11 +571,16 @@ function YamlTab({ target }: { target: ResourceRef }) {
 
     if (error) return <ErrorBox error={error} />;
     if (text === null) {
-        return (
-            <div className="page-loading">
-                <span className="spinner" /> Reading YAML…
+        // The bar goes in too, empty: the editor must not shift down by a row
+        // when the manifest lands.
+        return waiting ? (
+            <div className="yamltab">
+                <div className="yaml-bar">
+                    <span className="faint">reading manifest…</span>
+                </div>
+                <TextSkeleton />
             </div>
-        );
+        ) : null;
     }
 
     return (
@@ -612,13 +613,10 @@ function DescribeTab({ target }: { target: ResourceRef }) {
         () => api.describe({ context, kind: target.kind, name: target.name, ns: target.ns }),
         [context, target.kind, target.name, target.ns],
     );
+    const waiting = useDelayed(!data && !error);
     if (error) return <ErrorBox error={error} />;
     if (!data) {
-        return (
-            <div className="page-loading">
-                <span className="spinner" /> Describing…
-            </div>
-        );
+        return waiting ? <TextSkeleton lines={18} /> : null;
     }
     return <TextPane text={data.text} />;
 }

@@ -18,10 +18,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Icon } from "../components/icons.tsx";
+import { RowsSkeleton } from "../components/Skeleton.tsx";
 import { Badge, Confirm, CopyButton, Empty, ErrorBox, Modal } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { act } from "../lib/actions.tsx";
-import { usePolled } from "../lib/hooks.ts";
+import { useDelayed, usePolled } from "../lib/hooks.ts";
 import { getState } from "../lib/store.ts";
 import type { ResourceRef } from "../lib/types.ts";
 import "./DataTab.css";
@@ -72,14 +73,11 @@ export function DataTab({ target }: { target: ResourceRef }) {
         () => Object.keys(edits).length + removed.length,
         [edits, removed],
     );
+    const waiting = useDelayed(!data && !error);
 
     if (error) return <ErrorBox error={error} />;
     if (!data) {
-        return (
-            <div className="page-loading">
-                <span className="spinner" /> Reading data…
-            </div>
-        );
+        return waiting ? <RowsSkeleton rows={7} /> : null;
     }
 
     const save = async () => {

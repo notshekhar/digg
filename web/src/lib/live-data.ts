@@ -40,6 +40,12 @@ export interface LiveList {
     /** True while the socket is feeding this list; false means "please poll". */
     streaming: boolean;
     initial: boolean;
+    /**
+     * The socket has been asked and has not answered yet, but still might.
+     * A caller polls only once this is false, so opening a table does not ask
+     * the cluster for the same collection twice.
+     */
+    pending: boolean;
 }
 
 export function useLiveList(kind: string, ns: string | null): LiveList {
@@ -51,6 +57,22 @@ export function useLiveList(kind: string, ns: string | null): LiveList {
     const [ready, setReady] = useState(false);
     const store = useRef(new Map<string, Row>());
     const status = useLiveStatus();
+    /*
+     * The socket's head start.
+     *
+     * Both paths cost the server one list when nothing is cached, and the watch
+     * path costs NOTHING when the collection is already being watched — so
+     * firing a poll the instant a table mounts bought a duplicate list of every
+     * collection anyone opened. The poll is held for this long, and skipped
+     * outright if the snapshot beats it.
+     */
+    const [grace, setGrace] = useState(true);
+
+    useEffect(() => {
+        setGrace(true);
+        const id = setTimeout(() => setGrace(false), 300);
+        return () => clearTimeout(id);
+    }, [context, kind, ns, paused]);
 
     useEffect(() => {
         if (!context || !kind || paused) return;
@@ -91,16 +113,19 @@ export function useLiveList(kind: string, ns: string | null): LiveList {
     // else and the caller must poll — including the moment before the first
     // snapshot lands, so a slow watch never shows an empty table.
     const streaming = status === "live" && !paused && !fatal && ready;
+    const pending = status !== "offline" && !paused && !fatal && !ready && grace;
     // A watch failure is never the user's problem: polling covers it, and the
     // page has nothing to do about "watch is not supported on this kind". Only
     // a failure of the data itself (the polled path) earns an error box.
-    return { data, error: null, streaming, initial: !ready };
+    return { data, error: null, streaming, initial: !ready, pending };
 }
 
 export interface LiveDetail {
     data: Detail | null;
     error: string | null;
     streaming: boolean;
+    /** See LiveList.pending — the socket has been asked and may still answer. */
+    pending: boolean;
     /** The object no longer exists — the page should go back. */
     gone: boolean;
 }
@@ -112,7 +137,14 @@ export function useLiveDetail(kind: string, name: string, ns?: string): LiveDeta
     const [error, setError] = useState<string | null>(null);
     const [fatal, setFatal] = useState(false);
     const [gone, setGone] = useState(false);
+    const [grace, setGrace] = useState(true);
     const status = useLiveStatus();
+
+    useEffect(() => {
+        setGrace(true);
+        const id = setTimeout(() => setGrace(false), 300);
+        return () => clearTimeout(id);
+    }, [context, kind, name, ns, paused]);
 
     useEffect(() => {
         if (!context || !kind || !name || paused) return;
@@ -137,7 +169,8 @@ export function useLiveDetail(kind: string, name: string, ns?: string): LiveDeta
     }, [context, kind, name, ns, paused]);
 
     const streaming = status === "live" && !paused && !fatal && data !== null;
-    return { data, error, streaming, gone };
+    const pending = status !== "offline" && !paused && !fatal && data === null && grace;
+    return { data, error, streaming, pending, gone };
 }
 
 /** Merge a live source with a polled one, preferring live when it is working. */

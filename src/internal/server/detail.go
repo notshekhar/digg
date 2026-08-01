@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/notshekhar/digg/src/internal/kube"
 	"github.com/notshekhar/digg/src/internal/model"
@@ -103,7 +104,7 @@ func buildDetailView(cl *kube.Cluster, kindName string, o *model.Obj) *model.Det
 		return &v
 
 	case kindName == "nodes":
-		pods, err := cl.List("pods", kube.ListOptions{FieldSelector: "spec.nodeName=" + name})
+		pods, err := cl.ListCached("pods", kube.ListOptions{FieldSelector: "spec.nodeName=" + name})
 		if err != nil {
 			pods = nil
 		}
@@ -115,7 +116,7 @@ func buildDetailView(cl *kube.Cluster, kindName string, o *model.Obj) *model.Det
 		var pods []model.Obj
 		metrics := model.NoMetrics
 		if selector != "" {
-			if list, err := cl.List("pods", kube.ListOptions{
+			if list, err := cl.ListCached("pods", kube.ListOptions{
 				Namespace: ns, LabelSelector: selector,
 			}); err == nil {
 				pods = list
@@ -164,7 +165,7 @@ func BuildRevisions(cl *kube.Cluster, kindName string, o *model.Obj) []RevisionR
 
 	switch kindName {
 	case "deployments":
-		all, err := cl.List("replicasets", kube.ListOptions{Namespace: ns})
+		all, err := cl.ListCached("replicasets", kube.ListOptions{Namespace: ns})
 		if err != nil {
 			return []RevisionRow{}
 		}
@@ -201,7 +202,7 @@ func BuildRevisions(cl *kube.Cluster, kindName string, o *model.Obj) []RevisionR
 		return rows
 
 	case "statefulsets", "daemonsets":
-		all, err := cl.List("controllerrevisions", kube.ListOptions{Namespace: ns})
+		all, err := cl.ListCached("controllerrevisions", kube.ListOptions{Namespace: ns})
 		if err != nil {
 			return []RevisionRow{}
 		}
@@ -255,7 +256,7 @@ func buildSection(cl *kube.Cluster, kindName string, o *model.Obj, isWorkload, s
 
 		switch sec.Type {
 		case "workloadPods", "endpointPods":
-			pods, err := cl.List("pods", kube.ListOptions{Namespace: ns, LabelSelector: sec.Selector})
+			pods, err := cl.ListCached("pods", kube.ListOptions{Namespace: ns, LabelSelector: sec.Selector})
 			if err != nil {
 				pods = nil
 			}
@@ -290,7 +291,7 @@ func buildSection(cl *kube.Cluster, kindName string, o *model.Obj, isWorkload, s
 			}
 
 		case "nodePods":
-			pods, err := cl.List("pods", kube.ListOptions{FieldSelector: "spec.nodeName=" + sec.Node})
+			pods, err := cl.ListCached("pods", kube.ListOptions{FieldSelector: "spec.nodeName=" + sec.Node})
 			if err != nil {
 				pods = nil
 			}
@@ -308,7 +309,7 @@ func buildSection(cl *kube.Cluster, kindName string, o *model.Obj, isWorkload, s
 			}
 
 		case "pvcConsumers":
-			all, err := cl.List("pods", kube.ListOptions{Namespace: ns})
+			all, err := cl.ListCached("pods", kube.ListOptions{Namespace: ns})
 			if err != nil {
 				all = nil
 			}
@@ -329,7 +330,7 @@ func buildSection(cl *kube.Cluster, kindName string, o *model.Obj, isWorkload, s
 			}
 
 		case "cronjobJobs":
-			all, err := cl.List("jobs", kube.ListOptions{Namespace: ns})
+			all, err := cl.ListCached("jobs", kube.ListOptions{Namespace: ns})
 			if err != nil {
 				all = nil
 			}
@@ -386,11 +387,11 @@ func buildSection(cl *kube.Cluster, kindName string, o *model.Obj, isWorkload, s
 			// typo'd service name or a selector that matches nothing is the
 			// ordinary way an Ingress breaks, and kubectl will not tell you.
 			// Two list calls answer it for every row.
-			services, err := cl.List("services", kube.ListOptions{Namespace: ns})
+			services, err := cl.ListCached("services", kube.ListOptions{Namespace: ns})
 			if err != nil {
 				services = nil
 			}
-			endpoints, err := cl.List("endpoints", kube.ListOptions{Namespace: ns})
+			endpoints, err := cl.ListCached("endpoints", kube.ListOptions{Namespace: ns})
 			if err != nil {
 				endpoints = nil
 			}
@@ -475,9 +476,31 @@ func BuildDetailPayload(cl *kube.Cluster, kind *model.KindDef, ref kube.Resource
 	// The rich view and the generic section are built together: kinds that have
 	// a real page get one, everything else keeps the summary + table that every
 	// kind is guaranteed.
-	summary, section, events, canLogs := buildSection(
-		cl, kind.Name, obj, isWorkload, model.RichKinds[kind.Name])
-	view := buildDetailView(cl, kind.Name, obj)
+	//
+	// They are also built CONCURRENTLY. Each is several reads — pods, metrics,
+	// events — and run one after the other a pod page on a remote cluster spends
+	// most of its time waiting on round trips it could have overlapped. The two
+	// share no state, and the reads they duplicate (pod metrics, twice) collapse
+	// into one call in the metrics cache's single-flight.
+	var (
+		summary  []model.Row
+		section  *SectionPayload
+		events   []kube.Event
+		canLogs  bool
+		view     *model.DetailView
+		buildsWG sync.WaitGroup
+	)
+	buildsWG.Add(2)
+	go func() {
+		defer buildsWG.Done()
+		summary, section, events, canLogs = buildSection(
+			cl, kind.Name, obj, isWorkload, model.RichKinds[kind.Name])
+	}()
+	go func() {
+		defer buildsWG.Done()
+		view = buildDetailView(cl, kind.Name, obj)
+	}()
+	buildsWG.Wait()
 
 	payload := &DetailPayload{
 		Kind: kindMeta(kind), Name: obj.GetName(), NS: obj.GetNamespace(),

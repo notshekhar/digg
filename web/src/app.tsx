@@ -13,11 +13,12 @@ import { Palette } from "./components/Palette.tsx";
 import { Picker } from "./components/Picker.tsx";
 import { Icon } from "./components/icons.tsx";
 import { Rail } from "./components/Rail.tsx";
+import { AppSkeleton } from "./components/Skeleton.tsx";
 import { TopBar } from "./components/TopBar.tsx";
 import { Modal, Toasts } from "./components/ui.tsx";
 import { ActionDialogs } from "./lib/actions.tsx";
 import { api, boot0 } from "./lib/api.ts";
-import { useHotkeys } from "./lib/hooks.ts";
+import { useDelayed, useHotkeys } from "./lib/hooks.ts";
 import { navigate, useRoute } from "./lib/router.ts";
 import { useNamespaces, useTab } from "./lib/query.ts";
 import { refreshNow, setDock, setState, toast, useApp } from "./lib/store.ts";
@@ -40,6 +41,7 @@ export function App() {
     const [, setTab] = useTab();
     const nsRef = useRef({ selectedNs, setSelectedNs });
     nsRef.current = { selectedNs, setSelectedNs };
+    const booting = useDelayed(!ready && !error);
 
     // ── boot ───────────────────────────────────────────────────────────────
     useEffect(() => {
@@ -146,12 +148,11 @@ export function App() {
     }
 
     if (!ready) {
-        return (
-            <div className="boot">
-                <span className="spinner" />
-                <span className="faint">connecting to cluster…</span>
-            </div>
-        );
+        // The chrome digg is about to have, rather than a centred spinner that
+        // is then replaced by a completely different screen. Delayed like every
+        // other placeholder: a local cluster answers /api/boot before this
+        // would paint.
+        return booting ? <AppSkeleton /> : null;
     }
 
     return (

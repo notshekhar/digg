@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"math"
+	"sync"
 
 	"github.com/notshekhar/digg/src/internal/kube"
 	"github.com/notshekhar/digg/src/internal/model"
@@ -112,18 +113,31 @@ func usageColumnsFor(cl *kube.Cluster, kindName string, items []model.Obj, names
 // podsideUsage covers pods, and anything whose usage is the sum of the pods it
 // owns.
 func podsideUsage(cl *kube.Cluster, kindName string, items []model.Obj, namespace string) *UsageColumns {
-	top := cl.TopPods(namespace, "")
-
-	var pods []model.Obj
+	// Usage needs two independent answers — what the pods are using, and (for a
+	// workload table) which pods there are. Asking for them one after the other
+	// put two round trips in front of every deployments page for no reason.
+	var (
+		wg   sync.WaitGroup
+		top  map[string]kube.PodMetrics
+		pods []model.Obj
+	)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		top = cl.TopPods(namespace, "")
+	}()
 	if kindName == "pods" {
 		pods = items
 	} else {
-		var err error
-		pods, err = cl.List("pods", kube.ListOptions{Namespace: namespace})
-		if err != nil {
-			pods = nil
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if out, err := cl.ListCached("pods", kube.ListOptions{Namespace: namespace}); err == nil {
+				pods = out
+			}
+		}()
 	}
+	wg.Wait()
 
 	sample := func(pod *model.Obj) (float64, float64, bool) {
 		m, ok := top[pod.GetNamespace()+"/"+pod.GetName()]
@@ -212,11 +226,24 @@ func podsideUsage(cl *kube.Cluster, kindName string, items []model.Obj, namespac
 // nodeUsage covers nodes: usage against capacity, and how much of it is already
 // promised.
 func nodeUsage(cl *kube.Cluster, items []model.Obj) *UsageColumns {
-	top := cl.TopNodes()
-	pods, err := cl.List("pods", kube.ListOptions{})
-	if err != nil {
-		pods = nil
-	}
+	// Same as podsideUsage: two independent reads, so they overlap.
+	var (
+		wg   sync.WaitGroup
+		top  map[string]kube.NodeMetrics
+		pods []model.Obj
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		top = cl.TopNodes()
+	}()
+	go func() {
+		defer wg.Done()
+		if out, err := cl.ListCached("pods", kube.ListOptions{}); err == nil {
+			pods = out
+		}
+	}()
+	wg.Wait()
 
 	type req struct {
 		cpu, mem float64

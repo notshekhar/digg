@@ -83,6 +83,28 @@ export function usePolled<T>(fn: () => Promise<T>, deps: unknown[], opts: { enab
     return { data, error, loading, initial, reload: () => setNonce((n) => n + 1) };
 }
 
+/**
+ * True only once `active` has been true continuously for `ms`.
+ *
+ * Every loading state in digg goes through this. Reads land in ~13ms through
+ * the proxy, so a placeholder painted the moment a fetch starts is a one-frame
+ * flash — worse than no placeholder at all, because the eye registers movement
+ * and nothing else. Below the threshold the screen simply does not change; past
+ * it, the wait is real and worth showing.
+ */
+export function useDelayed(active: boolean, ms = 160): boolean {
+    const [shown, setShown] = useState(false);
+    useEffect(() => {
+        if (!active) {
+            setShown(false);
+            return;
+        }
+        const id = setTimeout(() => setShown(true), ms);
+        return () => clearTimeout(id);
+    }, [active, ms]);
+    return active && shown;
+}
+
 type Handler = (e: KeyboardEvent) => void;
 
 /**

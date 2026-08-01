@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
@@ -44,6 +45,12 @@ type NodeMetrics struct {
 // and the older name-only lookups still work. They collide only for same-named
 // pods in different namespaces, which is why the qualified lookup wins.
 func (c *Cluster) TopPods(namespace, labelSelector string) map[string]PodMetrics {
+	return c.metricsCache.do("pods/"+namespace+"/"+labelSelector, func() any {
+		return c.topPods(namespace, labelSelector)
+	}).(map[string]PodMetrics)
+}
+
+func (c *Cluster) topPods(namespace, labelSelector string) map[string]PodMetrics {
 	out := map[string]PodMetrics{}
 	list, err := c.Metrics.MetricsV1beta1().PodMetricses(namespace).
 		List(context.Background(), metav1.ListOptions{LabelSelector: labelSelector})
@@ -81,6 +88,12 @@ func (c *Cluster) TopPods(namespace, labelSelector string) map[string]PodMetrics
 // A pod-level number cannot answer "which of these three containers is eating
 // the node", which is the question a container card exists to answer.
 func (c *Cluster) TopPodContainers(namespace, labelSelector, pod string) map[string]PodMetrics {
+	return c.metricsCache.do("containers/"+namespace+"/"+labelSelector+"/"+pod, func() any {
+		return c.topPodContainers(namespace, labelSelector, pod)
+	}).(map[string]PodMetrics)
+}
+
+func (c *Cluster) topPodContainers(namespace, labelSelector, pod string) map[string]PodMetrics {
 	out := map[string]PodMetrics{}
 	api := c.Metrics.MetricsV1beta1().PodMetricses(namespace)
 
@@ -142,6 +155,10 @@ func containerUsage(cs []metricsv1beta1.ContainerMetrics) map[string]PodMetrics 
 // metrics.k8s.io, the denominator from each node's ALLOCATABLE (what the
 // scheduler can hand out), which is what kubectl divides by too.
 func (c *Cluster) TopNodes() map[string]NodeMetrics {
+	return c.metricsCache.do("nodes", func() any { return c.topNodes() }).(map[string]NodeMetrics)
+}
+
+func (c *Cluster) topNodes() map[string]NodeMetrics {
 	out := map[string]NodeMetrics{}
 	usage, err := c.Metrics.MetricsV1beta1().NodeMetricses().List(context.Background(), metav1.ListOptions{})
 	if err != nil {
@@ -182,10 +199,23 @@ func (c *Cluster) TopNodes() map[string]NodeMetrics {
 
 // MetricsAvailable reports whether metrics-server answered at all, so the UI can
 // draw a hatched bar rather than a confident 0%.
+//
+// Whether a cluster HAS metrics-server does not change minute to minute, and
+// this is asked on every overview build, so the answer is held longer than the
+// numbers are.
 func (c *Cluster) MetricsAvailable() bool {
-	_, err := c.Metrics.MetricsV1beta1().NodeMetricses().List(context.Background(), metav1.ListOptions{Limit: 1})
-	return err == nil
+	return c.metricsCache.do("available", func() any {
+		_, err := c.Metrics.MetricsV1beta1().NodeMetricses().List(
+			context.Background(), metav1.ListOptions{Limit: 1})
+		return err == nil
+	}).(bool)
 }
+
+// metricsTTL is how long a sample is reused. metrics-server runs with
+// --metric-resolution=60s by default and its PodMetrics carry `window: 1m`, so
+// anything under a minute is returning the same numbers; 10s keeps a manual
+// refresh feeling live while collapsing the burst of calls one navigation makes.
+const metricsTTL = 10 * time.Second
 
 func num(f float64) string {
 	return fmt.Sprintf("%v", f)

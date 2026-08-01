@@ -16,6 +16,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { api } from "./api.ts";
 import { getState, refreshNow, openTerminal, setDock, setState, toast } from "./store.ts";
+import { RowsSkeleton } from "../components/Skeleton.tsx";
 import type { MenuItem } from "../components/ui.tsx";
 import { Confirm, Modal } from "../components/ui.tsx";
 import type { ResourceRef } from "./types.ts";
@@ -537,7 +538,7 @@ function RollbackDialog({ ref_, onClose }: { ref_: ResourceRef; onClose: () => v
         <Modal title={`Rollback ${ref_.name}`} onClose={onClose}>
             {error ? <div className="errbox">{error}</div> : null}
             {revisions === null ? (
-                <p className="dialog-note">Loading revisions…</p>
+                <RowsSkeleton rows={4} />
             ) : revisions.length === 0 ? (
                 <p className="dialog-note">No rollout history for this workload.</p>
             ) : (

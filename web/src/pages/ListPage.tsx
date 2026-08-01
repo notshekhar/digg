@@ -12,10 +12,11 @@ import { useEffect, useMemo, useState } from "react";
 import { DataGrid, rowKey } from "../components/DataGrid.tsx";
 import { ColumnsMenu } from "../components/DataGrid.tsx";
 import { Icon } from "../components/icons.tsx";
+import { TableSkeleton } from "../components/Skeleton.tsx";
 import { Empty, ErrorBox } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { confirmDelete, resourceActions } from "../lib/actions.tsx";
-import { usePolled } from "../lib/hooks.ts";
+import { useDelayed, usePolled } from "../lib/hooks.ts";
 import { useEither, useLiveList } from "../lib/live-data.ts";
 import { navigate } from "../lib/router.ts";
 import { useApp } from "../lib/store.ts";
@@ -51,7 +52,7 @@ export function ListPage({ kind, onOpen }: { kind: string; onOpen: (ref: Resourc
     const polled = usePolled(
         () => api.list({ context, kind, ns: nsForApi }),
         [context, kind, nsForApi],
-        { enabled: Boolean(context && kind) && !stream.streaming },
+        { enabled: Boolean(context && kind) && !stream.streaming && !stream.pending },
     );
     const { data, error, initial, loading } = useEither(stream.data, stream.streaming, polled);
 
@@ -85,6 +86,11 @@ export function ListPage({ kind, onOpen }: { kind: string; onOpen: (ref: Resourc
     const selectedRefs = rows.filter((r) => selected.has(rowKey(r))).map(refOf);
 
     const title = meta?.title ?? kind;
+
+    // The placeholder table only appears if the first read is actually slow.
+    // The columns are the catalog's, so its header is the header the rows will
+    // arrive under — nothing shifts when they do.
+    const waiting = useDelayed(initial && !data && !error);
 
     return (
         <div className="page">
@@ -142,10 +148,8 @@ export function ListPage({ kind, onOpen }: { kind: string; onOpen: (ref: Resourc
 
             {error ? <ErrorBox error={error} /> : null}
 
-            {initial && !data ? (
-                <div className="page-loading">
-                    <span className="spinner" /> Loading {title.toLowerCase()}…
-                </div>
+            {waiting ? (
+                <TableSkeleton columns={meta?.columns} />
             ) : data ? (
                 <DataGrid
                     columns={data.columns}
