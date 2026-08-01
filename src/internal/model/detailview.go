@@ -461,7 +461,12 @@ func SpecRefs(spec map[string]any) *RefSet {
 		refs.add(kindSecrets, mstr(asMap(raw), "name"), "image pull")
 	}
 
+	// ephemeralContainers count too. They are `kubectl debug` containers, so a
+	// ConfigMap or Secret reached only from one is reached by something someone
+	// attached by hand and may well have forgotten — precisely the reference
+	// that is worth surfacing rather than the one worth omitting.
 	containers := append(containerList(spec, "initContainers"), containerList(spec, "containers")...)
+	containers = append(containers, containerList(spec, "ephemeralContainers")...)
 	for _, c := range containers {
 		who := mstr(c, "name")
 		if who == "" {

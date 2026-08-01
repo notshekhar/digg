@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.2.1
+
+- **A ConfigMap that seven pods mount no longer claims nobody uses it.** "Used
+  By" folds a controlled pod into the workload above it — except it was
+  *dropping* those pods rather than folding them, and the kubelet injects
+  references no pod template carries. Every pod on a modern cluster projects
+  `kube-root-ca.crt`, so only the pod knows, and its page came back empty. The
+  pods now fold as intended, and a workload reached both through its template
+  and through its pods says so once: `envFrom in echo, 1 pod`.
+- **Ephemeral containers are walked.** A ConfigMap or Secret reached only from a
+  `kubectl debug` container was invisible — which is the reference most worth
+  surfacing, since someone attached it by hand and may have forgotten.
+
 ## v2.2.0
 
 - **`digg update` shows you the download.** Both installers have drawn a

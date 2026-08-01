@@ -509,24 +509,36 @@ func dataLinks(r *linkResolver, o *model.Obj, kindName, ns string, add addFn) {
 	lists := r.listMany(ns, kinds...)
 
 	users := []model.Ref{}
-	// Controlled pods are dropped: their controller is already in the list and
-	// says the same thing once instead of once per replica.
+	// A controlled pod is FOLDED into its controller, not dropped.
+	//
+	// Dropping it was wrong, and quietly: the kubelet injects references the
+	// template never carries — every pod on a modern cluster projects
+	// kube-root-ca.crt — so a ConfigMap that seven running pods mount reported
+	// that nobody used it. Only the pod knows, and the answer is still the
+	// Deployment above it.
+	matched := []model.Obj{}
 	for _, kind := range kinds {
 		for i := range lists[kind] {
 			obj := &lists[kind][i]
+			refs := model.SpecRefs(model.PodSpecOf(obj))
+			via, ok := refs.Uses(kindName, name)
+			if !ok {
+				continue
+			}
 			if kind == "pods" {
 				if _, owned := model.OwnerRef(obj); owned {
+					matched = append(matched, *obj)
 					continue
 				}
 			}
-			refs := model.SpecRefs(model.PodSpecOf(obj))
-			if via, ok := refs.Uses(kindName, name); ok {
-				users = append(users, model.Ref{
-					Kind: kind, Name: obj.GetName(), NS: ns, Via: via})
-			}
+			users = append(users, model.Ref{
+				Kind: kind, Name: obj.GetName(), NS: ns, Via: via})
 		}
 	}
-	add("Used By", users)
+	// DedupeRefs merges the two hints when a workload is reached both ways —
+	// "envFrom in api, 3 pods" — which is more informative than either alone.
+	users = append(users, r.workloadsBehind(ns, matched)...)
+	add("Used By", capRefs(model.DedupeRefs(users), 25))
 
 	if kindName != "secrets" {
 		return

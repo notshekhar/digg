@@ -232,6 +232,27 @@ func TestRefSetUses(t *testing.T) {
 	}
 }
 
+// A `kubectl debug` container is something someone attached by hand and may
+// have forgotten; a Secret reached only from one is worth surfacing, not
+// omitting.
+func TestSpecRefsWalksEphemeralContainers(t *testing.T) {
+	spec := map[string]any{
+		"containers": []any{map[string]any{"name": "app"}},
+		"ephemeralContainers": []any{map[string]any{
+			"name": "debugger",
+			"env": []any{map[string]any{
+				"name":      "TOKEN",
+				"valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": "debug-token"}},
+			}},
+		}},
+	}
+	refs := SpecRefs(spec)
+	via, ok := refs.Uses("secrets", "debug-token")
+	if !ok || via != "env TOKEN" {
+		t.Fatalf("via %q ok=%v", via, ok)
+	}
+}
+
 // A CronJob hides its pod template one level deeper. Without that case its
 // mounts vanish, and a Secret only a CronJob uses reads as unused.
 func TestPodSpecOfReachesIntoACronJobTemplate(t *testing.T) {
