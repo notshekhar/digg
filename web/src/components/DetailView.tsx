@@ -64,18 +64,27 @@ function FactValue({ fact, onOpen }: { fact: Fact; onOpen: (ref: ResourceRef) =>
         if (!fact.refs.length) return <span className="faint">-</span>;
         return (
             <span className="reflinks">
-                {fact.refs.map((r, i) => (
-                    <button
-                        type="button"
-                        className="reflink"
-                        key={`${r.kind}/${r.name}-${i}`}
-                        title={`${r.kind}/${r.name}${r.via ? ` — ${r.via}` : ""}`}
-                        onClick={() => onOpen({ kind: r.kind, name: r.name, ns: r.ns })}
-                    >
-                        <span className="reflink-name mono">{r.name}</span>
-                        {r.via ? <span className="reflink-via mono">{r.via}</span> : null}
-                    </button>
-                ))}
+                {fact.refs.map((r, i) =>
+                    // A ref with no kind is not navigable — the "+12 more"
+                    // marker that caps a long list. Drawing it as a button
+                    // would be a link to nowhere.
+                    r.kind ? (
+                        <button
+                            type="button"
+                            className="reflink"
+                            key={`${r.kind}/${r.name}-${i}`}
+                            title={`${r.kind}/${r.name}${r.via ? ` — ${r.via}` : ""}`}
+                            onClick={() => onOpen({ kind: r.kind, name: r.name, ns: r.ns })}
+                        >
+                            <span className="reflink-name mono">{r.name}</span>
+                            {r.via ? <span className="reflink-via mono">{r.via}</span> : null}
+                        </button>
+                    ) : (
+                        <span className="reflink flat" key={`more-${i}`}>
+                            <span className="reflink-name mono faint">{r.name}</span>
+                        </span>
+                    ),
+                )}
             </span>
         );
     }
@@ -130,6 +139,27 @@ function FactList({ group, onOpen, boxed }: { group: FactGroup; onOpen: (ref: Re
                 </div>
             ))}
         </div>
+    );
+}
+
+/**
+ * The Related block, rendered on every detail page — rich or not.
+ *
+ * It is deliberately the same four primitives as the rest of the rich view: a
+ * relation resolved against the cluster ("the Deployment behind this Service")
+ * should look exactly like one read out of the spec ("the ConfigMap this
+ * mounts"), because to the person reading the page they are the same fact.
+ */
+export function LinkGroups({ groups, onOpen }: { groups?: FactGroup[]; onOpen: (ref: ResourceRef) => void }) {
+    if (!groups?.length) return null;
+    return (
+        <>
+            {groups.map((g, i) => (
+                <Section title={g.title || "Related"} key={i}>
+                    <FactList group={g} onOpen={onOpen} />
+                </Section>
+            ))}
+        </>
     );
 }
 
@@ -357,20 +387,33 @@ export function DetailViewPane({
             ) : null}
 
             {pods ? (
-                <Section title="Pods">
+                <Section title={pods.title || "Pods"}>
                     <div className="podcounts">
-                        <span>
-                            <strong className="mono">{pods.desired}</strong> desired
-                        </span>
-                        <span>
-                            <strong className="mono">{pods.updated}</strong> updated
-                        </span>
-                        <span>
-                            <strong className="mono">{pods.ready}</strong> ready
-                        </span>
-                        <span>
-                            <strong className="mono">{pods.available}</strong> available
-                        </span>
+                        {/* A kind that embeds pods it does not own brings its
+                            own words; the rollout four only make sense for a
+                            workload. */}
+                        {pods.counts?.length
+                            ? pods.counts.map((c, i) => (
+                                  <span key={i}>
+                                      <strong className={`mono ${c.tone && c.tone !== "neutral" ? `t-${c.tone}` : ""}`}>{c.v}</strong> {c.k}
+                                  </span>
+                              ))
+                            : (
+                                  <>
+                                      <span>
+                                          <strong className="mono">{pods.desired}</strong> desired
+                                      </span>
+                                      <span>
+                                          <strong className="mono">{pods.updated}</strong> updated
+                                      </span>
+                                      <span>
+                                          <strong className="mono">{pods.ready}</strong> ready
+                                      </span>
+                                      <span>
+                                          <strong className="mono">{pods.available}</strong> available
+                                      </span>
+                                  </>
+                              )}
                     </div>
                     <PodsTable rows={pods.rows} onOpen={onOpen} />
                 </Section>

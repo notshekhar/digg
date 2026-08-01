@@ -23,6 +23,7 @@ package update
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
@@ -57,7 +58,24 @@ type Options struct {
 	Version string
 }
 
+// client is for the small requests — the latest-release redirect, the sums
+// file. One minute is generous for both.
 var client = &http.Client{Timeout: 60 * time.Second}
+
+// blobClient is for the tarball, which is ~80MB.
+//
+// Client.Timeout covers reading the body too, so the one-minute cap was a
+// deadline on the user's bandwidth: any link slower than about 11 Mbit killed
+// the download partway through — which, before there was a bar, looked like a
+// mysterious failure rather than a timeout. The header timeout still catches a
+// server that never answers; after that, a slow link is allowed to be slow.
+var blobClient = &http.Client{
+	Timeout: 30 * time.Minute,
+	Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		ResponseHeaderTimeout: 30 * time.Second,
+	},
+}
 
 // Run performs the update and reports whether the binary changed.
 func Run(current string, opts Options) error {
@@ -243,8 +261,13 @@ func selfPath() (string, error) {
 	return resolved, nil
 }
 
+// download fetches the release tarball, drawing a bar while it does.
+//
+// ContentLength is the honest denominator and GitHub always sends one for a
+// release asset; -1 means the server would not say, and the bar counts up
+// instead of guessing a total.
 func download(url string) ([]byte, error) {
-	resp, err := client.Get(url)
+	resp, err := blobClient.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("download failed: %w", err)
 	}
@@ -252,7 +275,21 @@ func download(url string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("download failed: %s returned %s", url, resp.Status)
 	}
-	return io.ReadAll(resp.Body)
+
+	total := resp.ContentLength
+	if total < 0 {
+		total = 0
+	}
+	bar := newProgress(total)
+
+	var buf bytes.Buffer
+	buf.Grow(int(total))
+	if _, err := io.Copy(io.MultiWriter(&buf, bar), resp.Body); err != nil {
+		bar.abort()
+		return nil, fmt.Errorf("download failed: %w", err)
+	}
+	bar.done()
+	return buf.Bytes(), nil
 }
 
 // verify checks the published sha256 when there is one. A missing sums file is

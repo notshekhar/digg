@@ -1,5 +1,52 @@
 # Changelog
 
+## v2.2.0
+
+- **`digg update` shows you the download.** Both installers have drawn a
+  ■■■･･･ bar since v1.4.2; the self-updater — the easy path, the one you are
+  meant to use — printed a line and then sat silent for the length of an 80MB
+  transfer, which on a slow link is indistinguishable from a hang. It now draws
+  the same bar, glyph for glyph, off bytes that have actually arrived. Piped or
+  redirected output stays a clean log.
+- **And it is no longer capped at one minute.** The updater's HTTP client had a
+  60-second timeout that covered reading the body, so any connection slower than
+  about 11 Mbit had the download killed partway through. The header timeout
+  still catches a server that never answers; after that a slow link is allowed
+  to be slow.
+- **Services get a real page.** A Service used to be six key/value rows and a
+  list of pods, which is a thin answer for an object that is almost entirely
+  pointers. It is now parsed the way pods and workloads are: every port as its
+  own row with its targetPort, nodePort and appProtocol, the in-cluster DNS name
+  you actually paste into another app's config, session affinity and both
+  traffic policies, IP families, source ranges, and the headless case named as
+  headless instead of reported as "Cluster IP: None".
+- **A Service now says why nothing is serving it.** `kubectl` prints only the
+  ready endpoints, so a Service with no selector, a selector matching no pods,
+  and matched pods all failing readiness look identical — three different bugs
+  with three different fixes. Each is now its own sentence, and the pod table
+  underneath is counted in the Service's own words (selected / serving / not
+  serving) rather than a workload's rollout counters.
+- **Every page shows what the object is connected to.** A new Related block
+  follows the pointers that go *into* an object as well as out of it: the
+  Deployment behind a Service (through its pods' owner chain, and through pod
+  templates when the Service has no endpoints at all), the Ingresses routing to
+  it, the workloads that mount a ConfigMap or read a Secret, the pods holding a
+  PVC open, the bindings that grant a Role, the HPA that scales a workload and
+  the PodDisruptionBudget that protects it, a pod's route in from the outside
+  two hops away. Kinds without a rich page — ConfigMaps, Secrets, PVCs,
+  ServiceAccounts, RoleBindings, IngressClasses — get it too; for several of
+  them the links are the entire point of the object.
+- **Broken links stay links.** An Ingress backend that does not exist is
+  labelled "no such Service" and remains clickable, because opening it and
+  getting a 404 is a clearer answer than a name that was never a link.
+- **Twelve replicas fold into the one Deployment that made them.** Every list of
+  pods reached through a relation is collapsed to its controller, hinted with
+  how many pods it accounts for, so "who mounts this ConfigMap" is one row and
+  not one row per replica. Jobs fold into their CronJob the same way.
+- **A CronJob's mounts are no longer invisible.** Its pod template sits one
+  level deeper than every other workload's, behind `jobTemplate`, which meant a
+  Secret used only by a CronJob read as unused.
+
 ## v2.1.0
 
 - **Waiting looks like the thing you are waiting for.** Every screen used to

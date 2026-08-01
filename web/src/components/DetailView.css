@@ -112,6 +112,17 @@
     border-color: var(--accent);
     background: var(--bg);
 }
+/* The overflow marker that caps a long list. It carries no kind, goes nowhere,
+   and must not offer a hover state that promises it does. */
+.reflink.flat,
+.reflink.flat:hover {
+    cursor: default;
+    background: transparent;
+    border-color: transparent;
+}
+.reflink.flat .reflink-name {
+    color: var(--fg-faint);
+}
 .reflink-name {
     color: var(--accent);
     overflow: hidden;

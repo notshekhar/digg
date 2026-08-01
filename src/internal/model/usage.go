@@ -33,7 +33,15 @@ type Alloc struct {
 }
 
 // PodSpecOf returns the pod spec of a pod, or of a workload's pod template.
+//
+// A CronJob buries its template one level deeper than everything else, behind
+// jobTemplate. Without that case it falls through to the CronJob's own spec,
+// which has no containers and no volumes — so a CronJob mounting a Secret would
+// report mounting nothing, and the Secret's page would say nobody uses it.
 func PodSpecOf(o *Obj) map[string]any {
+	if tmpl := mapOf(o, "spec", "jobTemplate", "spec", "template", "spec"); tmpl != nil {
+		return tmpl
+	}
 	if tmpl := mapOf(o, "spec", "template", "spec"); tmpl != nil {
 		return tmpl
 	}

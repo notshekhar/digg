@@ -101,12 +101,19 @@ type PodLine struct {
 }
 
 // PodsBlock is the counts plus the rows.
+//
+// Title and Counts exist for the kinds that embed a pod table but do not own
+// the pods: a Service's pods are "selected" and "serving", never "updated" and
+// "available", and labelling them with a workload's four rollout counters would
+// be four wrong words under a correct table.
 type PodsBlock struct {
 	Desired   int64     `json:"desired"`
 	Updated   int64     `json:"updated"`
 	Ready     int64     `json:"ready"`
 	Available int64     `json:"available"`
 	Rows      []PodLine `json:"rows"`
+	Title     string    `json:"title,omitempty"`
+	Counts    []Chip    `json:"counts,omitempty"`
 }
 
 // DetailView is a full rich page.
@@ -131,6 +138,7 @@ var RichKinds = map[string]bool{
 	"replicasets":  true,
 	"jobs":         true,
 	"nodes":        true,
+	"services":     true,
 }
 
 const chipLimit = 40

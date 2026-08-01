@@ -106,8 +106,14 @@ export interface Detail {
     ns?: string;
     summary: [string, string][];
     section: Section | null;
-    /** The rich page model — pods, workloads and nodes. Null for other kinds. */
+    /** The rich page model — pods, workloads, services, nodes. Null otherwise. */
     view: DetailView | null;
+    /**
+     * What this object is connected to, resolved against the cluster: the
+     * Deployment behind a Service, the workloads mounting a ConfigMap, the
+     * Ingress routing to it. Present for every kind, absent when nothing links.
+     */
+    links?: FactGroup[];
     events: K8sEvent[];
     canLogs: boolean;
 }
@@ -186,6 +192,10 @@ export interface DetailView {
         ready: number;
         available: number;
         rows: PodLine[];
+        /** Heading override — a Service's pods are not a workload's pods. */
+        title?: string;
+        /** Counts in the embedder's own words, replacing the rollout four. */
+        counts?: Chip[];
     };
 }
 

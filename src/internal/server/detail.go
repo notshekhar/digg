@@ -65,6 +65,10 @@ type DetailPayload struct {
 	Summary []model.Row       `json:"summary"`
 	Section *SectionPayload   `json:"section"`
 	View    *model.DetailView `json:"view"`
+	// Links are the relations that needed the cluster to resolve — who points
+	// at this object, and what it points at that its own spec does not name.
+	// Every kind gets them, rich page or not.
+	Links   []model.FactGroup `json:"links,omitempty"`
 	Events  []kube.Event      `json:"events"`
 	CanLogs bool              `json:"canLogs"`
 }
@@ -109,6 +113,44 @@ func buildDetailView(cl *kube.Cluster, kindName string, o *model.Obj) *model.Det
 			pods = nil
 		}
 		v := model.NodeView(o, pods, model.MetricsView(toUsage(cl.TopPods("", "")), nil))
+		return &v
+
+	case kindName == "services":
+		// A Service's own pods AND its Endpoints object, because the two
+		// disagree in exactly the interesting case: the selector matches five
+		// pods and none of them is serving.
+		selector := model.ServiceSelector(o)
+		var pods []model.Obj
+		var ep *model.Obj
+		metrics := model.NoMetrics
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if len(selector) == 0 {
+				return
+			}
+			sel := kube.LabelSelectorOf(selector)
+			if list, err := cl.ListCached("pods", kube.ListOptions{
+				Namespace: ns, LabelSelector: sel,
+			}); err == nil {
+				pods = list
+			}
+			if containers := cl.TopPodContainers(ns, sel, ""); len(containers) > 0 {
+				metrics = model.MetricsFromContainers(toUsage(containers))
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			if got, err := cl.Get(kube.ResourceRef{
+				Kind: "endpoints", Name: name, Namespace: ns, Context: cl.Context,
+			}); err == nil {
+				ep = got
+			}
+		}()
+		wg.Wait()
+		sort.Slice(pods, func(i, j int) bool { return pods[i].GetName() < pods[j].GetName() })
+		v := model.ServiceView(o, ep, pods, metrics)
 		return &v
 
 	case model.WorkloadKinds[kindName]:
@@ -488,9 +530,10 @@ func BuildDetailPayload(cl *kube.Cluster, kind *model.KindDef, ref kube.Resource
 		events   []kube.Event
 		canLogs  bool
 		view     *model.DetailView
+		links    []model.FactGroup
 		buildsWG sync.WaitGroup
 	)
-	buildsWG.Add(2)
+	buildsWG.Add(3)
 	go func() {
 		defer buildsWG.Done()
 		summary, section, events, canLogs = buildSection(
@@ -500,11 +543,18 @@ func BuildDetailPayload(cl *kube.Cluster, kind *model.KindDef, ref kube.Resource
 		defer buildsWG.Done()
 		view = buildDetailView(cl, kind.Name, obj)
 	}()
+	// The relation graph is the third independent build: it lists other kinds
+	// entirely, shares no state with the two above, and every list it makes is
+	// one a warm informer answers for free.
+	go func() {
+		defer buildsWG.Done()
+		links = BuildLinks(cl, kind.Name, obj)
+	}()
 	buildsWG.Wait()
 
 	payload := &DetailPayload{
 		Kind: kindMeta(kind), Name: obj.GetName(), NS: obj.GetNamespace(),
-		Summary: summary, View: view, Events: events, CanLogs: canLogs,
+		Summary: summary, View: view, Links: links, Events: events, CanLogs: canLogs,
 	}
 	// /api/detail returns view XOR section so the two never render together.
 	if view == nil {

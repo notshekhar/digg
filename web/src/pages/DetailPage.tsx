@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Icon } from "../components/icons.tsx";
-import { DetailViewPane } from "../components/DetailView.tsx";
+import { DetailViewPane, LinkGroups } from "../components/DetailView.tsx";
 import { DetailSkeleton, RowsSkeleton, TextSkeleton } from "../components/Skeleton.tsx";
 import { Badge, CopyButton, ErrorBox, Facts, Menu, Tabs } from "../components/ui.tsx";
 import { LogPane } from "../components/LogPane.tsx";
@@ -297,6 +297,8 @@ function OverviewTab({
                     }
                 />
 
+                <LinkGroups groups={data.links} onOpen={(ref) => onOpen(ref)} />
+
                 <section className="detail-section">
                     <header className="detail-section-head">
                         <h3>Events</h3>
@@ -311,6 +313,11 @@ function OverviewTab({
     return (
         <div className="detail-scroll">
             <Facts rows={facts} />
+
+            {/* The generic page gets the same relation block the rich ones do:
+                a ConfigMap is nothing but its links, and it never qualified for
+                a rich view. */}
+            <LinkGroups groups={data.links} onOpen={(ref) => onOpen(ref)} />
 
             {section ? (
                 <section className="detail-section">

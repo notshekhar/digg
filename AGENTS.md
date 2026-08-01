@@ -124,11 +124,40 @@ Rules that matter here:
 
 Every kind gets `model/details.go` — a key/value summary plus one related table.
 Kinds in `RichKinds` (pods, deployments, statefulsets, daemonsets, replicasets,
-jobs, nodes) get a full model instead: identity card, fact groups, container
-cards with usage against requests/limits, and the pods they own. `/api/detail`
-returns `view` for those and `section: null`, so the two never render at once.
-Bars are **null-safe**: no metrics-server means a hatched bar, never a confident
-0%.
+jobs, services, nodes) get a full model instead: identity card, fact groups,
+container cards with usage against requests/limits, and the pods they own.
+`/api/detail` returns `view` for those and `section: null`, so the two never
+render at once. Bars are **null-safe**: no metrics-server means a hatched bar,
+never a confident 0%.
+
+Services live in `model/serviceview.go` rather than `detailview.go`, and their
+embedded pod table sets `PodsBlock.Title`/`Counts` — a Service's pods are
+"selected" and "serving", never a workload's four rollout counters.
+
+## Relations: the third build
+
+`server/links.go` resolves what an object is connected to and returns fact
+groups the client renders as **Related**, on every kind — rich page or not. It
+is the third goroutine in `BuildDetailPayload`, alongside the section and the
+view. The pure half (selector matching, owner-chain plurals, endpoint parsing,
+`RefSet.Uses` — SpecRefs read backwards) is in `model/links.go` and has tests.
+
+Four rules, and breaking any of them makes the block worse than absent:
+
+- **Reads go through `ListCached`**, and `linkResolver.list` memoises per page
+  build; several relations want the same namespace's pods.
+- **An empty selector matches nothing** (`model.LabelsMatch`). The opposite of
+  what an empty `metav1.LabelSelector` means, and getting it backwards puts a
+  whole namespace behind an ExternalName Service.
+- **A relation that resolves to nothing is dropped, not shown empty.** A heading
+  with a dash under it claims the link does not exist, which is a different
+  statement from "digg did not look".
+- **Pods fold into their controller** (`workloadsBehind` → `rootOwner`, which
+  climbs ReplicaSet→Deployment and Job→CronJob), hinted "6 pods". Never list
+  replicas beside the thing that made them.
+
+A cluster-wide relation (PriorityClass → pods, StorageClass → PVCs) caps at 25
+with a kind-less `Ref`, which the client draws as text rather than a dead link.
 
 ## Adding a kind
 

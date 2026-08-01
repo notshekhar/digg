@@ -47,9 +47,12 @@ const (
 
 // watchPodsFor are the kinds whose detail page must also react to pod churn.
 // A pod going CrashLoopBackOff never touches the Deployment object at all.
+// A Service is here for the same reason: its page is a live answer to "is
+// anything serving this", and that answer changes when a pod goes unready
+// without the Service object being touched.
 var watchPodsFor = map[string]bool{
 	"deployments": true, "statefulsets": true, "daemonsets": true,
-	"replicasets": true, "jobs": true, "nodes": true,
+	"replicasets": true, "jobs": true, "nodes": true, "services": true,
 }
 
 type clientMessage struct {

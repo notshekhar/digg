@@ -34,6 +34,11 @@ func labelsToSelector(m map[string]string) string {
 	return strings.Join(parts, ",")
 }
 
+// LabelSelectorOf renders a bare label map as the "a=b,c=d" selector the API
+// takes. A Service's spec.selector is already that shape, unlike a workload's,
+// so it needs no unwrapping — just the deterministic rendering.
+func LabelSelectorOf(m map[string]string) string { return labelsToSelector(m) }
+
 // SpecSelector builds a label selector from a workload's OWN spec.selector.
 //
 // Port of workloadSelector() in src/format.ts. Workload usage is computed from
