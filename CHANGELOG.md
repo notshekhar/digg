@@ -1,5 +1,23 @@
 # Changelog
 
+## v2.2.2
+
+- **An Ingress with more than four routes no longer paints over the rows below
+  it.** The table reserves a row's height from a line count the server sends,
+  and that count was capped at four while the cell went on rendering up to
+  twelve routes — so every route past the fourth spilled out of the row and
+  landed on top of its neighbours. On a real cluster, where a public Ingress
+  carries seven or eight paths, the whole page came out as overlapping text.
+  The count is now exactly the number of lines drawn, an extra line is 18px in
+  both the reserved height and the stylesheet, and a row clips rather than
+  spilling if the two ever disagree again.
+- **Routes past the cap are counted instead of dropped.** A row shows twelve
+  and then says `+4 more`, so an Ingress with thirty paths no longer looks like
+  an Ingress with twelve.
+- **Multi-line rows line up.** Namespace, name, class and the row's checkbox sat
+  centred against a column of routes; they now start at the top with the first
+  route, which is the line they belong to.
+
 ## v2.2.1
 
 - **A ConfigMap that seven pods mount no longer claims nobody uses it.** "Used

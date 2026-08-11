@@ -30,7 +30,22 @@ import { readyTone } from "../lib/format.ts";
 import "./DataGrid.css";
 
 export const ROW_H = 27;
+/**
+ * Height of each EXTRA line in a multi-line row (an Ingress with several
+ * routes). A one-line row is ROW_H; every line after that adds LINE_H, so a
+ * row is ROW_H + (lines - 1) * LINE_H.
+ *
+ * This MUST match `.route { line-height }` in DataGrid.css. If it is smaller
+ * than the text actually needs, the cell grows past the row box and paints on
+ * top of the rows below it.
+ */
+export const LINE_H = 18;
 const OVERSCAN = 12;
+
+/** Pixel height of a row, from the line count the server gave it. */
+export function rowHeightOf(lines: number | undefined): number {
+    return ROW_H + Math.max(0, (lines ?? 1) - 1) * LINE_H;
+}
 
 export interface RowKeyed extends Row {
     key: string;
@@ -80,10 +95,13 @@ function CellMeter({ pct, mark }: { pct: number | null; mark: number | null }) {
 /** Ingress routes: an openable URL and the backend it lands on, per line. */
 function RouteCell({
     routes,
+    more,
     ns,
     onOpenRef,
 }: {
     routes: Row["rules"];
+    /** Routes the server capped off the end of the list, if any. */
+    more?: number;
     ns?: string;
     onOpenRef?: (ref: ResourceRef) => void;
 }) {
@@ -117,6 +135,11 @@ function RouteCell({
                     </button>
                 </span>
             ))}
+            {more ? (
+                <span className="route faint" title={`${more} more route${more === 1 ? "" : "s"} — open the Ingress to see them all`}>
+                    +{more} more
+                </span>
+            ) : null}
         </span>
     );
 }
@@ -285,14 +308,14 @@ export function DataGrid({
 
     /*
      * Row offsets. Most tables are uniform 27px rows and this is a plain
-     * multiplication, but an Ingress with four routes needs four lines, so the
-     * window is computed from a prefix sum rather than from one constant. The
-     * sum is only rebuilt when the rows change.
+     * multiplication, but an Ingress with seven routes needs seven lines, so
+     * the window is computed from a prefix sum rather than from one constant.
+     * The sum is only rebuilt when the rows change.
      */
     const offsets = useMemo(() => {
         const out = new Float64Array(sorted.length + 1);
         for (let i = 0; i < sorted.length; i++) {
-            out[i + 1] = out[i]! + ROW_H * Math.max(1, sorted[i]!.lines ?? 1);
+            out[i + 1] = out[i]! + rowHeightOf(sorted[i]!.lines);
         }
         return out;
     }, [sorted]);
@@ -471,7 +494,10 @@ export function DataGrid({
                                             setMenuFor({ row, x: e.clientX, y: e.clientY });
                                         }}
                                     >
-                                        <div className="grid-cell check" onClick={(e) => e.stopPropagation()}>
+                                        <div
+                                            className={`grid-cell check ${row.lines && row.lines > 1 ? "tall" : ""}`}
+                                            onClick={(e) => e.stopPropagation()}
+                                        >
                                             <input
                                                 type="checkbox"
                                                 checked={isSel}
@@ -498,7 +524,12 @@ export function DataGrid({
                                                 >
                                                     {custom ?? (
                                                         c.label === "RULES" && row.rules ? (
-                                                            <RouteCell routes={row.rules} ns={row.ns} onOpenRef={onOpenRef} />
+                                                            <RouteCell
+                                                                routes={row.rules}
+                                                                more={row.rulesMore}
+                                                                ns={row.ns}
+                                                                onOpenRef={onOpenRef}
+                                                            />
                                                         ) : meter ? (
                                                             <>
                                                                 <span className="metric-value">{value}</span>

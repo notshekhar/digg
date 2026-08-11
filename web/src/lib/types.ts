@@ -64,6 +64,8 @@ export interface Row {
     meters?: Record<number, Meter>;
     /** Ingress routes, rendered as links in the RULES column. */
     rules?: Route[];
+    /** Routes the server capped off the end of `rules`. */
+    rulesMore?: number;
     /** Row height in text lines; the grid lays out variable-height rows. */
     lines?: number;
 }

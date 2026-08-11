@@ -41,6 +41,11 @@
     padding: 0;
     justify-content: center;
 }
+/* In a tall row the box is stretched, so the checkbox needs the same top
+   alignment the text cells get or it floats in the middle of the routes. */
+.grid-cell.check.tall {
+    padding-top: 6px;
+}
 .grid-cell.check input {
     accent-color: var(--accent);
     width: 12px;
@@ -87,6 +92,10 @@
     border-bottom: 1px solid var(--line-soft);
     cursor: pointer;
     color: var(--fg-muted);
+    /* Rows are absolutely positioned by the virtualiser, so a cell that grew
+       taller than its row would paint straight over its neighbours instead of
+       pushing them down. Clip rather than let that happen. */
+    overflow: hidden;
 }
 .grid-row:hover {
     background: var(--bg-hover);
@@ -167,16 +176,22 @@
     background: var(--fg-muted);
 }
 
-/* A cell in a multi-line row (Ingress rules) sits at the top, not centred. */
+/* A cell in a multi-line row (Ingress rules) sits at the top, not centred.
+   align-self matters as much as align-items: the row is a grid with
+   align-items:center, so without it the cell box is only as tall as its own
+   content and gets centred — a tall cell then spills out of both ends of the
+   row. Stretching pins it to the row box. */
 .grid-cell.tall {
+    align-self: stretch;
     align-items: flex-start;
     padding-top: 5px;
+    overflow: hidden;
 }
 
 .routes {
     display: flex;
     flex-direction: column;
-    gap: 1px;
+    gap: 0;
     min-width: 0;
     width: 100%;
 }
@@ -185,7 +200,10 @@
     align-items: baseline;
     gap: 6px;
     min-width: 0;
-    line-height: 17px;
+    /* One route is exactly one line of the row: keep in step with LINE_H in
+       DataGrid.tsx, which is what the virtualiser reserves per extra line. */
+    height: 18px;
+    line-height: 18px;
 }
 .route-url {
     color: var(--accent);

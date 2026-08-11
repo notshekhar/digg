@@ -29,8 +29,12 @@ type Row struct {
 	Labels map[string]string    `json:"labels,omitempty"`
 	Meters map[int]*Meter       `json:"meters,omitempty"`
 	Rules  []model.IngressRoute `json:"rules,omitempty"`
+	// RulesMore is how many routes were dropped by the per-row cap, so the cell
+	// can say so instead of silently lying about the shape of the Ingress.
+	RulesMore int `json:"rulesMore,omitempty"`
 	// Lines makes a multi-route Ingress taller; the grid lays rows out by their
-	// own heights.
+	// own heights. It MUST equal the number of text lines the cell renders —
+	// under-counting here is what makes tall rows overlap their neighbours.
 	Lines int `json:"lines,omitempty"`
 }
 
@@ -139,12 +143,15 @@ func BuildRow(o *model.Obj, kind *model.KindDef, usage *UsageColumns, insertAt i
 	// of a comma-joined string you have to retype.
 	if kind.Name == "ingresses" {
 		rules := model.IngressRoutes(o)
+		lines := len(rules)
 		if len(rules) > maxIngressRules {
+			row.RulesMore = len(rules) - maxIngressRules
 			rules = rules[:maxIngressRules]
+			lines = len(rules) + 1 // the "+N more" line is a line too
 		}
 		row.Rules = rules
-		if len(rules) > 1 {
-			row.Lines = min(len(rules), 4)
+		if lines > 1 {
+			row.Lines = lines
 		}
 	}
 	return row
@@ -161,13 +168,6 @@ func RowFingerprint(r Row) string {
 		return ""
 	}
 	return string(b)
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // ── small unstructured helpers shared by this package ───────────────────────
