@@ -105,7 +105,7 @@ func (c *Cluster) podForSpec(spec ForwardSpec) (string, int32, error) {
 	case "services", "service", "svc":
 		svc, err := c.Typed.CoreV1().Services(spec.Namespace).Get(ctxBG(), spec.Name, getOpts())
 		if err != nil {
-			return "", 0, wrap(err)
+			return "", 0, c.wrap(err)
 		}
 		// A service port may name a different container port; forwarding to the
 		// service's own number would hit nothing.
@@ -142,7 +142,7 @@ func (c *Cluster) podForSpec(spec ForwardSpec) (string, int32, error) {
 func (c *Cluster) firstRunningPod(ns, selector string) (string, error) {
 	list, err := c.Typed.CoreV1().Pods(ns).List(ctxBG(), listOpts(selector))
 	if err != nil {
-		return "", wrap(err)
+		return "", c.wrap(err)
 	}
 	for i := range list.Items {
 		if list.Items[i].Status.Phase == "Running" {

@@ -21,26 +21,50 @@
  */
 
 :root {
-    /* surfaces, dark ------------------------------------------------------ */
-    --bg: oklch(0.19 0.004 285.9);
-    --bg-elev: oklch(0.216 0.006 285.9);
-    --bg-sunk: oklch(0.163 0.004 285.9);
-    --bg-rail: oklch(0.174 0.004 285.9);
-    --bg-bar: oklch(0.163 0.004 285.9);
-    --bg-hover: oklch(1 0 0 / 5%);
-    --bg-active: oklch(1 0 0 / 8%);
-    --bg-overlay: oklch(0.12 0.004 285.9 / 62%);
+    /*
+     * Surfaces, dark.
+     *
+     * The step from --bg to --bg-elev is the only thing that says "this is a
+     * card" before you notice its border, so it has to be a step you can see:
+     * 1.19:1 here, where the first cut of this palette had 1.06 and every panel
+     * on the overview dissolved into the page behind it.
+     */
+    --bg: oklch(0.185 0.004 285.9);
+    --bg-elev: oklch(0.245 0.006 285.9);
+    --bg-sunk: oklch(0.148 0.004 285.9);
+    --bg-rail: oklch(0.166 0.004 285.9);
+    --bg-bar: oklch(0.148 0.004 285.9);
+    --bg-hover: oklch(1 0 0 / 7%);
+    --bg-active: oklch(1 0 0 / 11%);
+    --bg-overlay: oklch(0.1 0.004 285.9 / 68%);
 
     /* text ---------------------------------------------------------------- */
     --fg: oklch(0.985 0 0);
-    --fg-muted: oklch(0.705 0.015 286.1);
-    --fg-faint: oklch(0.554 0.016 285.9);
+    --fg-muted: oklch(0.72 0.015 286.1);
+    /*
+     * --fg-faint is not decoration: it is every column header, every eyebrow
+     * over a fact, and every placeholder. At the 3.9:1 it started at, a 10px
+     * uppercase mono header was guesswork. 5:1 is the floor for type this
+     * small, and it is what this L solves for against --bg.
+     */
+    --fg-faint: oklch(0.618 0.016 285.9);
     --fg-invert: oklch(0.16 0.004 285.9);
 
-    /* lines --------------------------------------------------------------- */
-    --line: oklch(1 0 0 / 9%);
-    --line-soft: oklch(1 0 0 / 5%);
-    --line-strong: oklch(1 0 0 / 16%);
+    /*
+     * Lines.
+     *
+     * A cockpit is read by scanning ACROSS a row, and a row you cannot see the
+     * edges of is a row your eye slides off. These are white alphas rather than
+     * fixed tones on purpose — the same token then draws a stronger rule on
+     * --bg-sunk (the table header, the toolbar) than it does on --bg-elev,
+     * which is the direction you want.
+     *
+     * Ratios against --bg: soft 1.44, line 1.80, strong 2.68. Anything under
+     * ~1.3 is a line only the person who wrote the CSS can see.
+     */
+    --line: oklch(1 0 0 / 19%);
+    --line-soft: oklch(1 0 0 / 13%);
+    --line-strong: oklch(1 0 0 / 30%);
 
     /* accent -------------------------------------------------------------- */
     --accent: oklch(0.78 0.12 220);
@@ -131,13 +155,17 @@ html[data-theme="light"] {
     --bg-overlay: oklch(0.35 0.01 286 / 30%);
 
     --fg: oklch(0.21 0.006 285.9);
-    --fg-muted: oklch(0.505 0.016 285.9);
-    --fg-faint: oklch(0.63 0.014 286);
+    --fg-muted: oklch(0.495 0.016 285.9);
+    /* Same 5:1 floor the dark theme's faint solves for, against white. */
+    --fg-faint: oklch(0.544 0.014 286);
     --fg-invert: oklch(0.99 0 0);
 
-    --line: oklch(0.9 0.004 286.3);
-    --line-soft: oklch(0.945 0.003 286.3);
-    --line-strong: oklch(0.83 0.005 286.3);
+    /* Ratios against --bg: soft 1.30, line 1.58, strong 2.40 — the light
+       mirror of the dark ramp, so a rule that reads in one theme reads in
+       the other rather than vanishing on the swap. */
+    --line: oklch(0.85 0.004 286.3);
+    --line-soft: oklch(0.912 0.003 286.3);
+    --line-strong: oklch(0.729 0.005 286.3);
 
     --accent: oklch(0.52 0.13 232);
     --accent-strong: oklch(0.44 0.12 232);
@@ -147,8 +175,8 @@ html[data-theme="light"] {
 
     --ok: oklch(0.52 0.14 155);
     --ok-soft: oklch(0.52 0.14 155 / 12%);
-    --warn: oklch(0.6 0.14 72);
-    --warn-soft: oklch(0.6 0.14 72 / 14%);
+    --warn: oklch(0.565 0.135 70);
+    --warn-soft: oklch(0.565 0.135 70 / 14%);
     --bad: oklch(0.53 0.2 25);
     --bad-soft: oklch(0.53 0.2 25 / 12%);
     --info: oklch(0.52 0.14 265);
@@ -158,7 +186,7 @@ html[data-theme="light"] {
 
     --c1: oklch(0.55 0.13 232);
     --c2: oklch(0.53 0.14 155);
-    --c3: oklch(0.6 0.14 72);
+    --c3: oklch(0.565 0.135 70);
     --c4: oklch(0.55 0.19 25);
     --c5: oklch(0.53 0.15 300);
     --c6: oklch(0.5 0.12 265);

@@ -2,6 +2,9 @@ package model
 
 import (
 	"math"
+	"regexp"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -106,5 +109,76 @@ func TestPercentClampsAndRefusesUnknownDenominator(t *testing.T) {
 	}
 	if got, ok := Percent(-1, 5); !ok || got != 0 {
 		t.Errorf("Percent(-1,5) = %v,%v", got, ok)
+	}
+}
+
+// ── the hand parser against the regex it replaced ───────────────────────────
+
+// ParseQuantity used to be this. It is kept here as the oracle: the point of
+// the rewrite was speed, and the only way that is a win rather than a rewrite
+// of the gauges' arithmetic is if the two agree on everything, including the
+// junk. The cases below are deliberately nastier than anything Kubernetes
+// emits — "Inf", "0x1p3" and "NaN" are exactly what a hand-rolled split lets
+// through if it forgets to check what it is handing to ParseFloat.
+var legacyQuantityRe = regexp.MustCompile(`^([+-]?[0-9.]+(?:[eE][+-]?[0-9]+)?)\s*([A-Za-z]*)$`)
+
+func legacyParseQuantity(value string) float64 {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return 0
+	}
+	m := legacyQuantityRe.FindStringSubmatch(text)
+	if m == nil {
+		return 0
+	}
+	num, err := strconv.ParseFloat(m[1], 64)
+	if err != nil || math.IsInf(num, 0) || math.IsNaN(num) {
+		return 0
+	}
+	if mult, ok := binaryUnits[m[2]]; ok {
+		return num * mult
+	}
+	if mult, ok := decimalUnits[m[2]]; ok {
+		return num * mult
+	}
+	return num
+}
+
+func TestParseQuantityMatchesTheRegexItReplaced(t *testing.T) {
+	corpus := []string{
+		// what the API actually sends
+		"", "0", "1", "2", "100m", "1500m", "250n", "10u", "1Ki", "1Mi", "1Gi",
+		"1Ti", "1Pi", "1Ei", "1k", "1K", "1M", "1G", "1T", "1P", "1E",
+		"128974848", "129e6", "129M", "123456789", "0.5", ".5", "1.5Gi",
+		"3865470566n", "-1", "-100m", "+2", "1e3", "1E3", "2.5e+3Ki", "1e-3",
+		// whitespace the regex tolerated
+		" 100m", "100m ", "  1Gi  ", "1.5 Gi", "1\tGi",
+		// junk that must stay 0
+		"m", "Gi", "abc", "1.2.3", "1Gi2", "1 2", "--1", "1..", "..", ".",
+		"NaN", "Inf", "-Inf", "Infinity", "0x1p3", "0X10", "1_000", "1e", "1e+",
+		"e3", "+", "-", "1Zz", "1 Gi Gi", "\n", "١٢٣", "1Gi\n",
+	}
+	for _, in := range corpus {
+		want := legacyParseQuantity(in)
+		got := ParseQuantity(in)
+		if got != want && !(math.IsNaN(got) && math.IsNaN(want)) {
+			t.Errorf("ParseQuantity(%q) = %v, regex said %v", in, got, want)
+		}
+	}
+}
+
+func BenchmarkParseQuantity(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = ParseQuantity("512Mi")
+		_ = ParseQuantity("100m")
+	}
+}
+
+func BenchmarkParseQuantityViaRegex(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = legacyParseQuantity("512Mi")
+		_ = legacyParseQuantity("100m")
 	}
 }

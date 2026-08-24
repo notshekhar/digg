@@ -59,6 +59,13 @@ func ctxWithTimeout() (context.Context, context.CancelFunc) {
 func (c *Cluster) Resolve(kind string) (schema.GroupVersionResource, bool, error) {
 	gvr, err := c.Mapper.ResourceFor(schema.GroupVersionResource{Resource: kind})
 	if err != nil {
+		// The RESTMapper answers out of discovery, so a failure here is either
+		// "this cluster has no such kind" or "digg could not reach the cluster
+		// to ask". Reporting the second as the first is how an expired SSO
+		// session came out of the UI as `unknown kind "pods"`.
+		if UnreachableCluster(err) {
+			return schema.GroupVersionResource{}, false, Diagnose(c.Context, err)
+		}
 		return schema.GroupVersionResource{}, false, errf("unknown kind %q: %v", kind, err)
 	}
 	gvk, err := c.Mapper.KindFor(schema.GroupVersionResource{Resource: kind})
@@ -120,7 +127,7 @@ func (c *Cluster) List(kind string, opts ListOptions) ([]Obj, error) {
 	}
 	list, err := res.List(ctx, lo)
 	if err != nil {
-		return nil, wrap(err)
+		return nil, c.wrap(err)
 	}
 	return list.Items, nil
 }
@@ -150,7 +157,7 @@ func (c *Cluster) Get(ref ResourceRef) (*Obj, error) {
 	defer cancel()
 	obj, err := res.Get(ctx, ref.Name, metav1.GetOptions{})
 	if err != nil {
-		return nil, wrap(err)
+		return nil, c.wrap(err)
 	}
 	return obj, nil
 }
@@ -197,7 +204,7 @@ func (c *Cluster) Describe(ref ResourceRef) (string, error) {
 	ns := ref.Namespace
 	out, err := d.Describe(ns, ref.Name, describe.DescriberSettings{ShowEvents: true})
 	if err != nil {
-		return "", wrap(err)
+		return "", c.wrap(err)
 	}
 	return out, nil
 }
@@ -240,7 +247,7 @@ func (c *Cluster) Apply(manifest string) (string, error) {
 			metav1.ApplyOptions{FieldManager: "digg", Force: true})
 	}
 	if err != nil {
-		return "", wrap(err)
+		return "", c.wrap(err)
 	}
 	return fmt.Sprintf("%s/%s configured", strings.ToLower(applied.GetKind()), applied.GetName()), nil
 }
@@ -277,7 +284,7 @@ func (c *Cluster) DeleteWith(ref ResourceRef, opts DeleteOptions) (string, error
 	ctx, cancel := ctxWithTimeout()
 	defer cancel()
 	if err := res.Delete(ctx, ref.Name, del); err != nil {
-		return "", wrap(err)
+		return "", c.wrap(err)
 	}
 	return fmt.Sprintf("%s \"%s\" deleted", singular(ref.Kind), ref.Name), nil
 }
@@ -298,7 +305,7 @@ func (c *Cluster) Patch(ref ResourceRef, patch any) (string, error) {
 	defer cancel()
 	out, err := res.Patch(ctx, ref.Name, types.MergePatchType, body, metav1.PatchOptions{})
 	if err != nil {
-		return "", wrap(err)
+		return "", c.wrap(err)
 	}
 	return fmt.Sprintf("%s/%s patched", strings.ToLower(out.GetKind()), out.GetName()), nil
 }
@@ -404,7 +411,7 @@ func (c *Cluster) RolloutUndo(ref ResourceRef, revision string) (string, error) 
 	}
 	out, err := r.Rollback(typed, nil, toRevision, cmdutil.DryRunNone)
 	if err != nil {
-		return "", wrap(err)
+		return "", c.wrap(err)
 	}
 	return out, nil
 }
@@ -426,7 +433,7 @@ func (c *Cluster) RolloutStatus(ref ResourceRef) (string, error) {
 	}
 	msg, _, err := sv.Status(obj, 0)
 	if err != nil {
-		return "", wrap(err)
+		return "", c.wrap(err)
 	}
 	return strings.TrimSpace(msg), nil
 }
@@ -436,7 +443,7 @@ func (c *Cluster) RolloutStatus(ref ResourceRef) (string, error) {
 func (c *Cluster) TriggerCronJob(ref ResourceRef) (string, error) {
 	cj, err := c.Typed.BatchV1().CronJobs(ref.Namespace).Get(context.Background(), ref.Name, metav1.GetOptions{})
 	if err != nil {
-		return "", wrap(err)
+		return "", c.wrap(err)
 	}
 	name := fmt.Sprintf("%s-manual-%s", ref.Name, strconv.FormatInt(time.Now().UnixMilli(), 36))
 	if len(name) > 63 {
@@ -453,7 +460,7 @@ func (c *Cluster) TriggerCronJob(ref ResourceRef) (string, error) {
 	}
 	created, err := c.Typed.BatchV1().Jobs(ref.Namespace).Create(context.Background(), job, metav1.CreateOptions{})
 	if err != nil {
-		return "", wrap(err)
+		return "", c.wrap(err)
 	}
 	return fmt.Sprintf("job.batch/%s created", created.Name), nil
 }
@@ -465,7 +472,7 @@ func (c *Cluster) Cordon(node string, schedulable bool) (string, error) {
 	_, err := c.Typed.CoreV1().Nodes().Patch(context.Background(), node,
 		types.MergePatchType, body, metav1.PatchOptions{})
 	if err != nil {
-		return "", wrap(err)
+		return "", c.wrap(err)
 	}
 	if schedulable {
 		return fmt.Sprintf("node/%s uncordoned", node), nil
@@ -499,9 +506,16 @@ func singular(kind string) string {
 
 // wrap turns an apimachinery error into the message the UI should show. kubectl
 // prints err.Error() for API failures and so did the Bun build via stderr.
-func wrap(err error) error {
+//
+// It also marks the error as the cluster's answer rather than digg's bug. Errors
+// about getting IN are routed through Diagnose first, so the reason reaches the
+// browser instead of the terminal digg happens to be running in.
+func (c *Cluster) wrap(err error) error {
 	if err == nil {
 		return nil
+	}
+	if d := Diagnose(c.Context, err); d != nil {
+		return &Error{msg: d.Error()}
 	}
 	return &Error{msg: err.Error()}
 }

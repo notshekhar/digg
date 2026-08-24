@@ -1,7 +1,7 @@
 package server
 
 import (
-	"encoding/json"
+	"math"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -162,12 +162,90 @@ func RowKey(ns, name string) string { return ns + "/" + name }
 
 // RowFingerprint is a cheap identity for "did this row actually change?" delta
 // suppression.
-func RowFingerprint(r Row) string {
-	b, err := json.Marshal(r)
-	if err != nil {
-		return ""
+//
+// This used to be `json.Marshal(row)`, which is correct and stable (encoding/json
+// sorts map keys) but costs an allocation and a full re-encode of every row on
+// every metrics pass — 5,000 pods across every namespace meant 5,000 marshals
+// and ~2MB of retained fingerprint strings every fifteen seconds, on the same
+// goroutine that has to answer the socket. A 64-bit FNV-1a over the same fields
+// says the same thing for a fraction of the work and 8 bytes of state per row.
+//
+// Go randomises map iteration order, so the two maps are folded in with
+// ADDITION rather than by appending: a commutative combine is what makes the
+// digest independent of the order the runtime happens to hand them back. Get
+// that wrong and every row looks changed on every pass, which is precisely the
+// storm the fingerprint exists to prevent.
+func RowFingerprint(r Row) uint64 {
+	h := fnvOffset
+	h = hashString(h, r.Name)
+	h = hashString(h, r.NS)
+	h = hashUint(h, uint64(r.TS))
+	h = hashUint(h, uint64(r.Lines))
+	h = hashUint(h, uint64(r.RulesMore))
+	for _, c := range r.Cells {
+		h = hashString(h, c)
 	}
-	return string(b)
+	// Tones are a pure function of Cells (see BuildRow), so hashing them again
+	// would only cost time.
+	var labels uint64
+	for k, v := range r.Labels {
+		labels += hashString(hashString(fnvOffset, k), v)
+	}
+	h = hashUint(h, labels)
+	var meters uint64
+	for i, m := range r.Meters {
+		e := hashUint(fnvOffset, uint64(i))
+		e = hashFloat(e, m.Pct)
+		e = hashFloat(e, m.Mark)
+		meters += e
+	}
+	h = hashUint(h, meters)
+	for _, rule := range r.Rules {
+		h = hashString(h, rule.Host)
+		h = hashString(h, rule.Path)
+		h = hashString(h, rule.Service)
+		h = hashString(h, rule.Port)
+		h = hashString(h, rule.URL)
+	}
+	return h
+}
+
+const (
+	fnvOffset uint64 = 14695981039346656037
+	fnvPrime  uint64 = 1099511628211
+)
+
+func hashString(h uint64, s string) uint64 {
+	for i := 0; i < len(s); i++ {
+		h ^= uint64(s[i])
+		h *= fnvPrime
+	}
+	// A separator, so ["ab",""] and ["a","b"] are different rows.
+	h ^= 0xff
+	h *= fnvPrime
+	return h
+}
+
+func hashUint(h, v uint64) uint64 {
+	for i := 0; i < 8; i++ {
+		h ^= v & 0xff
+		h *= fnvPrime
+		v >>= 8
+	}
+	return h
+}
+
+// hashFloat folds a nullable number in. nil and 0 must not collide: "no
+// metrics-server" and "using nothing" are different answers, and the client
+// draws them differently, so nil gets a sentinel no float64 bit pattern of a
+// real percentage can reach.
+const nilFloat uint64 = 0x6469_6767_6e69_6c00 // "digg" + "nil"
+
+func hashFloat(h uint64, f *float64) uint64 {
+	if f == nil {
+		return hashUint(h, nilFloat)
+	}
+	return hashUint(h, math.Float64bits(*f))
 }
 
 // ── small unstructured helpers shared by this package ───────────────────────

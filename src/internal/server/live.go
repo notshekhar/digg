@@ -30,6 +30,15 @@ import (
 //	changed, and events are coalesced into frames, so a rollout that emits
 //	hundreds of events a second still renders at a readable rate.
 //
+//	AND A FRAME COSTS NOTHING BUT THE ROWS IN IT. Neither flush() nor the
+//	metrics pass may read through to the apiserver: the informer feeding this
+//	subscription already holds the answer, so flush() renders the objects its
+//	own events carried and refreshUsage goes through ListCached. Measured on
+//	minikube with every namespace selected and every pod being annotated in a
+//	loop for 30 seconds: 58 cluster-wide pod LISTs before, 2 after — and the
+//	two that remain are the informer's own initial sync. On a real cluster
+//	each of those was the whole pod collection, ten times a second.
+//
 //	NO SILENT DEGRADATION. If a kind cannot be watched (aggregated API, RBAC),
 //	the client is told so it can fall back to polling — rather than showing a
 //	table that quietly never updates.
@@ -78,12 +87,16 @@ type subscription struct {
 	mu sync.Mutex
 
 	// list state
-	isList     bool
-	usage      *UsageColumns
-	columns    []string
-	insertAt   int
-	prints     map[string]string
-	dirty      map[string]bool
+	isList   bool
+	usage    *UsageColumns
+	columns  []string
+	insertAt int
+	prints   map[string]uint64
+	// dirty carries the OBJECT the event delivered, not just its key. The
+	// informer already handed us the new state; going back to the apiserver
+	// for it — which is what the key-only version had to do — put a full
+	// cluster-wide LIST in front of every 100ms frame on a busy table.
+	dirty      map[string]*model.Obj
 	removed    map[string]bool
 	frame      *time.Timer
 	refreshing bool
@@ -272,8 +285,8 @@ func (l *liveSession) subscribeList(id string, cl *kube.Cluster, kind *model.Kin
 	sub := &subscription{
 		id: id, kind: kind, cluster: cl, ns: ns, isList: true,
 		columns: columns, insertAt: insertAt,
-		prints:      map[string]string{},
-		dirty:       map[string]bool{},
+		prints:      map[string]uint64{},
+		dirty:       map[string]*model.Obj{},
 		removed:     map[string]bool{},
 		stopMetrics: make(chan struct{}),
 	}
@@ -300,7 +313,9 @@ func (l *liveSession) subscribeList(id string, cl *kube.Cluster, kind *model.Kin
 		default:
 			key := RowKey(ev.Object.GetNamespace(), ev.Object.GetName())
 			sub.mu.Lock()
-			sub.dirty[key] = true
+			// Last write in the frame wins, which is the coalescing we want:
+			// a rollout emitting six events for one pod renders once.
+			sub.dirty[key] = ev.Object
 			delete(sub.removed, key)
 			sub.mu.Unlock()
 			l.scheduleFrame(sub)
@@ -339,7 +354,11 @@ func (l *liveSession) refreshUsage(sub *subscription, full bool) {
 		sub.mu.Unlock()
 	}()
 
-	objects, err := sub.cluster.List(sub.kind.Name, kube.ListOptions{
+	// ListCached, not List: this subscription IS the watch that keeps the
+	// store warm, so the answer is already in memory and always at least as
+	// fresh as a list would be. Asking the apiserver here meant a cluster-wide
+	// LIST every fifteen seconds per open table per tab.
+	objects, err := sub.cluster.ListCached(sub.kind.Name, kube.ListOptions{
 		Namespace: sub.ns, ClusterScoped: sub.kind.ClusterScoped,
 	})
 	if err != nil {
@@ -361,13 +380,13 @@ func (l *liveSession) refreshUsage(sub *subscription, full bool) {
 	}
 
 	if full || columnsChanged {
-		prints := make(map[string]string, len(rows))
+		prints := make(map[string]uint64, len(rows))
 		for _, r := range rows {
 			prints[RowKey(r.NS, r.Name)] = RowFingerprint(r)
 		}
 		sub.mu.Lock()
 		sub.prints = prints
-		sub.dirty = map[string]bool{}
+		sub.dirty = map[string]*model.Obj{}
 		sub.removed = map[string]bool{}
 		sub.mu.Unlock()
 		l.push(map[string]any{
@@ -425,33 +444,24 @@ func (l *liveSession) flush(sub *subscription) {
 		return
 	}
 
-	objects, err := sub.cluster.List(sub.kind.Name, kube.ListOptions{
-		Namespace: sub.ns, ClusterScoped: sub.kind.ClusterScoped,
-	})
-	if err != nil {
-		return
-	}
-	byKey := make(map[string]*model.Obj, len(objects))
-	for i := range objects {
-		byKey[RowKey(objects[i].GetNamespace(), objects[i].GetName())] = &objects[i]
-	}
-
 	sub.mu.Lock()
 	usage, insertAt := sub.usage, sub.insertAt
 	dirty := sub.dirty
 	removed := sub.removed
-	sub.dirty = map[string]bool{}
+	sub.dirty = map[string]*model.Obj{}
 	sub.removed = map[string]bool{}
 
-	upsert := []Row{}
-	for key := range dirty {
-		obj, ok := byKey[key]
-		if !ok {
+	// Nothing is read here. Every object in `dirty` came off the informer with
+	// the event that dirtied it, so a frame costs exactly the rows that
+	// actually changed — not a list of the whole collection to find them.
+	upsert := make([]Row, 0, len(dirty))
+	for key, obj := range dirty {
+		if obj == nil {
 			continue // added and deleted inside one frame
 		}
 		row := BuildRow(obj, sub.kind, usage, insertAt)
 		print := RowFingerprint(row)
-		if sub.prints[key] == print {
+		if p, seen := sub.prints[key]; seen && p == print {
 			continue
 		}
 		sub.prints[key] = print

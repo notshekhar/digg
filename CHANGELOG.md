@@ -1,5 +1,66 @@
 # Changelog
 
+## v2.3.0
+
+- **Dark mode had no lines in it.** Borders were 9% white on a near-black
+  background — a contrast ratio of 1.27:1, which is a line only the person who
+  wrote the CSS can see. Table rows ran together with no separator, panels
+  dissolved into the page behind them, and column headers sat at 3.86:1, which
+  is guesswork at 10px. The whole ramp was rebuilt by contrast ratio rather than
+  by eye: row rules 1.13 → 1.44:1, borders 1.27 → 1.80:1, the card-versus-page
+  step 1.06 → 1.19:1, and every piece of text in both themes now clears 4.5:1.
+  Light mode got the same treatment for parity, where faint text had been
+  3.51:1.
+- **A live table no longer re-lists the whole cluster ten times a second.** The
+  watch coalesces events into 100ms frames, and each frame was doing a full LIST
+  against the apiserver purely to find the handful of objects that had changed —
+  across every namespace, that is every pod in the cluster, on every frame,
+  while anything is churning. The events already carry the objects, so a frame
+  now reads nothing at all, and the metrics pass goes through the warm informer
+  like every other read. Measured with every namespace selected and every pod
+  being annotated in a loop for 30 seconds: **58 cluster-wide pod LISTs before,
+  2 after** — and the two that remain are the informer's own initial sync.
+- **Usage columns stopped being quadratic.** A workloads table asked "is this
+  pod mine?" once per workload-pod pair, re-deriving each pod's labels and
+  re-parsing every container's requests and limits inside the inner loop. Each
+  pod is now reduced once and bucketed by namespace: for 400 deployments over
+  6,000 pods, **115ms → 6.7ms** and 57MB → 3.6MB.
+- **The three things under that got faster too**, because they run on every
+  refresh of every table: `PodSpecOf` was deep-copying an entire pod spec —
+  twice per pod — to read four resource strings; `ParseQuantity` was a regex
+  submatch called ~50,000 times per refresh (330ns/4 allocs → 58ns/0); and the
+  per-row change detector was a `json.Marshal` (1222ns/22 allocs → 163ns/0).
+- **The browser does less work per frame as well.** Delta ordering is patched in
+  place instead of re-sorted when membership has not changed (1.21ms → 0.44ms at
+  6,000 rows), the grid ranks rows once instead of inside the sort comparator
+  (0.94ms → 0.50ms), and the filter caches each row's searchable text instead of
+  lowercasing every cell on every keystroke (0.46ms → 0.12ms).
+- **An expired AWS login no longer arrives as `unknown kind "pods"`.** client-go
+  builds its credential-plugin runner with stderr hardcoded to the process's
+  own, so when `aws eks get-token` fails, the one line that says *why* goes to
+  whatever terminal digg is attached to and the caller gets back
+  `exec: executable aws failed with exit code 255` — the same sentence for an
+  expired `aws sso login`, an `AWS_PROFILE` that is not in `~/.aws/config`, no
+  credentials at all, and a role that cannot assume. Worse, it reached the UI as
+  an unknown kind, because the RESTMapper could not reach discovery and the
+  caller assumed the only reason for that was a kind it had never heard of. digg
+  now runs the plugin itself, keeps the half client-go drops, and prints what
+  the AWS CLI said next to the command that fixes it. A genuinely unknown kind
+  still says so.
+- **Five more ways an EKS login goes wrong now name themselves**: a kubeconfig
+  old enough to still say `client.authentication.k8s.io/v1alpha1` (removed in
+  Kubernetes 1.30, so it fails before the plugin is ever run); an assume-role
+  profile with `mfa_serial` that wants to prompt at a server with no terminal;
+  a plugin that is not on digg's PATH; an identity that mints a token fine and
+  is not in the cluster's access entries; and a private endpoint that is simply
+  not reachable from this machine.
+- **New: `digg doctor`.** Listing contexts only reads a file, which is why a
+  cluster you cannot reach still shows up in the picker. `digg doctor` does a
+  real round trip against every context, prints how each one authenticates, and
+  for the ones that fail prints the diagnosis above. `digg doctor <context>`
+  checks one. You do not need to restart digg after fixing a login — the next
+  read picks up the new credentials.
+
 ## v2.2.2
 
 - **An Ingress with more than four routes no longer paints over the rows below

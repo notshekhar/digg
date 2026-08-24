@@ -38,14 +38,16 @@ type Alloc struct {
 // jobTemplate. Without that case it falls through to the CronJob's own spec,
 // which has no containers and no volumes — so a CronJob mounting a Secret would
 // report mounting nothing, and the Secret's page would say nobody uses it.
+// The returned map is READ-ONLY: it is the informer's own memory, not a copy.
+// See mapNoCopy — every caller here only reads resource strings out of it.
 func PodSpecOf(o *Obj) map[string]any {
-	if tmpl := mapOf(o, "spec", "jobTemplate", "spec", "template", "spec"); tmpl != nil {
+	if tmpl := mapNoCopy(o, "spec", "jobTemplate", "spec", "template", "spec"); tmpl != nil {
 		return tmpl
 	}
-	if tmpl := mapOf(o, "spec", "template", "spec"); tmpl != nil {
+	if tmpl := mapNoCopy(o, "spec", "template", "spec"); tmpl != nil {
 		return tmpl
 	}
-	return mapOf(o, "spec")
+	return mapNoCopy(o, "spec")
 }
 
 // ContainersOf lists a pod's (or template's) app containers.
@@ -86,15 +88,18 @@ func ContainerAllocation(c map[string]any) Alloc {
 // effective request is the larger of "all app containers at once" and "the
 // greediest init container" — because they never run at the same time.
 func PodAllocation(o *Obj) Alloc {
+	// One spec lookup, not one per container list: PodSpecOf walks up to three
+	// nested paths and this is the hottest function in the product.
+	spec := PodSpecOf(o)
 	var out Alloc
-	for _, c := range ContainersOf(o) {
+	for _, c := range containerList(spec, "containers") {
 		a := ContainerAllocation(c)
 		out.CPU.Requests += a.CPU.Requests
 		out.CPU.Limits += a.CPU.Limits
 		out.Mem.Requests += a.Mem.Requests
 		out.Mem.Limits += a.Mem.Limits
 	}
-	for _, c := range InitContainersOf(o) {
+	for _, c := range containerList(spec, "initContainers") {
 		a := ContainerAllocation(c)
 		out.CPU.Requests = math.Max(out.CPU.Requests, a.CPU.Requests)
 		out.CPU.Limits = math.Max(out.CPU.Limits, a.CPU.Limits)
@@ -129,7 +134,20 @@ func SelectorMatches(o *Obj, selector map[string]any) bool {
 	if selector == nil {
 		return false
 	}
-	labels := o.GetLabels()
+	return SelectorMatchesLabels(o.GetLabels(), selector)
+}
+
+// SelectorMatchesLabels is SelectorMatches against labels already in hand.
+//
+// It exists because `Unstructured.GetLabels` builds a fresh map on every call,
+// and the usage columns ask "does this workload own this pod?" once per
+// (workload, pod) PAIR — so on an all-namespaces deployments table the object
+// form was allocating a labels map hundreds of thousands of times to answer a
+// question about a handful of strings.
+func SelectorMatchesLabels(labels map[string]string, selector map[string]any) bool {
+	if selector == nil {
+		return false
+	}
 
 	matchLabels := mmap(selector, "matchLabels")
 	for k, v := range matchLabels {

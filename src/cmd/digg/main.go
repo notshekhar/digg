@@ -25,6 +25,7 @@ const help = `digg — a Kubernetes cockpit in your browser
 Usage:
   digg                     Open the cluster browser (starts the server)
   digg serve               Same thing, said explicitly
+  digg doctor [context]    Check that each context actually connects
   digg update, upgrade     Update to the latest version
   digg version             Print the version
   digg help                Show this help
@@ -51,7 +52,8 @@ In the browser:
   ⌘K palette · ⌘F filter · ⌘J console · ⌘/ shortcuts · esc back
 
 digg reads your kubeconfig directly, so every auth method works — client certs,
-tokens, and exec plugins like aws/gcp/oidc.`
+tokens, and exec plugins like aws/gcp/oidc. If a context is listed but nothing
+loads, run "digg doctor": it runs the credential plugin and prints what it said.`
 
 func main() {
 	args := os.Args[1:]
@@ -81,6 +83,8 @@ func main() {
 		case "update", "upgrade":
 			runUpdate(args[1:])
 			return
+		case "doctor":
+			os.Exit(runDoctor(args[1:]))
 		}
 	}
 
@@ -162,4 +166,60 @@ func runUpdate(args []string) {
 		fmt.Fprintf(os.Stderr, "digg: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// runDoctor checks that each context can actually be reached, and prints why
+// when it cannot. Returns the process exit code.
+//
+// This exists because "digg cannot see my EKS cluster" is almost never about
+// seeing it: the context is in the picker, because listing contexts only reads
+// a file. It is the credential plugin behind it that is failing, and the only
+// way to find that out is to run it — which is what a doctor is for.
+func runDoctor(args []string) int {
+	var checks []kube.Health
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		checks = []kube.Health{kube.Check(args[0])}
+	} else {
+		if !kube.Available() {
+			fmt.Fprintln(os.Stderr, "digg: no kubeconfig with any context. Nothing to check.")
+			return 1
+		}
+		all, err := kube.CheckAll()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "digg: %v\n", err)
+			return 1
+		}
+		checks = all
+	}
+
+	current, _ := kube.CurrentContext()
+	failed := 0
+	for _, h := range checks {
+		marker := " "
+		if h.Context == current {
+			marker = "*"
+		}
+		if h.OK() {
+			fmt.Printf("%s %-38s ok        %s\n", marker, h.Context, h.Server)
+		} else {
+			failed++
+			fmt.Printf("%s %-38s FAILED\n", marker, h.Context)
+		}
+		fmt.Printf("    auth: %s\n", h.Auth)
+		if !h.OK() {
+			// The diagnosis is a paragraph with its own line breaks and its own
+			// indented command lines; indenting it again keeps it inside this
+			// context's block instead of reading as the next one's heading.
+			for _, line := range strings.Split(strings.TrimRight(h.Err.Error(), "\n"), "\n") {
+				fmt.Printf("    %s\n", line)
+			}
+		}
+		fmt.Println()
+	}
+
+	if failed > 0 {
+		fmt.Printf("%d of %d contexts could not be reached.\n", failed, len(checks))
+		return 1
+	}
+	return 0
 }

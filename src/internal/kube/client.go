@@ -118,7 +118,7 @@ func loader(context string) clientcmd.ClientConfig {
 func connect(context string) (*Cluster, error) {
 	cfg, err := loader(context).ClientConfig()
 	if err != nil {
-		return nil, errf("kubeconfig: %v", err)
+		return nil, Diagnose(context, errf("kubeconfig: %v", err))
 	}
 	// digg's UI is chatty on navigation; client-go's default 5 QPS throttles
 	// hard enough to look like a hang.
@@ -126,17 +126,21 @@ func connect(context string) (*Cluster, error) {
 	cfg.Burst = 200
 	cfg.UserAgent = "digg"
 
+	// Building a client is where a kubeconfig's exec block is validated, so an
+	// apiVersion Kubernetes has retired fails HERE — before any request, and
+	// nowhere near the code that knows how to explain it. Everything that can
+	// carry a credentials problem goes through Diagnose.
 	typed, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
-		return nil, err
+		return nil, Diagnose(context, err)
 	}
 	dyn, err := dynamic.NewForConfig(cfg)
 	if err != nil {
-		return nil, err
+		return nil, Diagnose(context, err)
 	}
 	mc, err := metricsclient.NewForConfig(cfg)
 	if err != nil {
-		return nil, err
+		return nil, Diagnose(context, err)
 	}
 
 	cached := memory.NewMemCacheClient(typed.Discovery())

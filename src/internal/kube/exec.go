@@ -287,7 +287,7 @@ func (c *Cluster) startPodDebug(t ExecTarget, send func([]byte), status func(any
 	pod, err := pods.Get(context.Background(), t.Pod, metav1.GetOptions{})
 	if err != nil {
 		status(map[string]any{"t": "error", "message": err.Error()})
-		return nil, wrap(err)
+		return nil, c.wrap(err)
 	}
 
 	ec := corev1.EphemeralContainer{
@@ -307,7 +307,7 @@ func (c *Cluster) startPodDebug(t ExecTarget, send func([]byte), status func(any
 
 	if _, err := pods.UpdateEphemeralContainers(context.Background(), t.Pod, pod, metav1.UpdateOptions{}); err != nil {
 		status(map[string]any{"t": "error", "message": err.Error()})
-		return nil, wrap(err)
+		return nil, c.wrap(err)
 	}
 
 	send([]byte("starting ephemeral debug container " + name + "…\r\n"))
@@ -323,7 +323,7 @@ func (c *Cluster) waitForEphemeral(ns, pod, container string) error {
 	for time.Now().Before(deadline) {
 		p, err := c.Typed.CoreV1().Pods(ns).Get(context.Background(), pod, metav1.GetOptions{})
 		if err != nil {
-			return wrap(err)
+			return c.wrap(err)
 		}
 		for _, s := range p.Status.EphemeralContainerStatuses {
 			if s.Name != container {
@@ -378,7 +378,7 @@ func (c *Cluster) startNodeDebug(t ExecTarget, send func([]byte), status func(an
 
 	if _, err := c.Typed.CoreV1().Pods(ns).Create(context.Background(), pod, metav1.CreateOptions{}); err != nil {
 		status(map[string]any{"t": "error", "message": err.Error()})
-		return nil, wrap(err)
+		return nil, c.wrap(err)
 	}
 	send([]byte("starting node debug pod " + name + " on " + t.Node + "…\r\n"))
 
@@ -405,7 +405,7 @@ func (c *Cluster) waitForPodRunning(ns, name string) error {
 	for time.Now().Before(deadline) {
 		p, err := c.Typed.CoreV1().Pods(ns).Get(context.Background(), name, metav1.GetOptions{})
 		if err != nil {
-			return wrap(err)
+			return c.wrap(err)
 		}
 		switch p.Status.Phase {
 		case corev1.PodRunning:

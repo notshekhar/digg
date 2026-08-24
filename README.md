@@ -9,7 +9,9 @@ delete.
 
 It reads your kubeconfig and talks to the API server directly, so every auth
 method works out of the box — client certs, tokens, and exec plugins like
-aws/gcp/oidc. **No kubectl required**, just a kubeconfig.
+aws/gcp/oidc. **No kubectl required**, just a kubeconfig. When a context is
+listed but nothing loads, `digg doctor` runs its credential plugin and prints
+what the plugin said.
 
 One static binary, no runtime, no dependencies.
 
@@ -59,11 +61,50 @@ digg --no-open             # print the URL only
 digg update                # update to the latest version
 digg update --check        # say what an update would do, download nothing
 digg update --version=v2.0.0   # install a specific release
+digg doctor                # check every context actually connects
+digg doctor <context>      # check one
 digg version               # print the version
 ```
 
 `digg serve` does the same thing as bare `digg`, said explicitly, and
 `digg upgrade` is an alias for `digg update`.
+
+### When a cluster will not connect
+
+Listing contexts only reads a file, so a context always shows up in the picker
+even when nothing behind it works. `digg doctor` is the difference:
+
+```
+$ digg doctor
+* eks-prod                               FAILED
+    auth: exec plugin: aws --region us-east-1 eks get-token --cluster-name prod
+    The credential plugin for this context failed.
+
+    aws says:
+
+        Error loading SSO Token: Token for https://acme.awsapps.com/start has
+        expired and refresh failed, please log in again by running
+        'aws sso login --profile prod'.
+
+    Your SSO session has expired. Log in again, then reload digg:
+
+        aws sso login --profile <profile>
+```
+
+This matters most on EKS, where there are many ways to be signed in to AWS and
+each fails differently: an expired `aws sso login`, an `AWS_PROFILE` that is not
+in `~/.aws/config`, no credentials at all, an assume-role profile with
+`mfa_serial` that wants to prompt, a kubeconfig old enough to still name
+`client.authentication.k8s.io/v1alpha1` (removed in Kubernetes 1.30), or an
+identity that mints a token fine and is not in the cluster's access entries.
+client-go reports every one of those as `exec: executable aws failed with exit
+code 255` and prints the useful half to its own stderr; digg runs the plugin,
+keeps that half, and names the command that fixes it. The same message appears
+in the browser, so you do not have to go looking at the terminal digg is
+running in.
+
+You do not need to restart digg after fixing a login — the next read picks up
+the new credentials.
 
 ### What you get
 

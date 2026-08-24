@@ -30,16 +30,16 @@ func (c *Cluster) Drain(node string) (string, error) {
 
 	n, err := c.Typed.CoreV1().Nodes().Get(helper.Ctx, node, getOpts())
 	if err != nil {
-		return "", wrap(err)
+		return "", c.wrap(err)
 	}
 	// Cordon first: draining a schedulable node just lets the pods come back.
 	if err := drain.RunCordonOrUncordon(helper, n, true); err != nil {
-		return "", wrap(err)
+		return "", c.wrap(err)
 	}
 	fmt.Fprintf(&out, "node/%s cordoned\n", node)
 
 	if err := drain.RunNodeDrain(helper, node); err != nil {
-		return out.String(), wrap(err)
+		return out.String(), c.wrap(err)
 	}
 	fmt.Fprintf(&out, "node/%s drained", node)
 	return out.String(), nil

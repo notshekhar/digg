@@ -30,6 +30,11 @@ Everything under `model/` is pure and has tests; everything that talks to a
 cluster lives in `kube/`. Keep it that way — it is why the model has real unit
 tests and the cluster layer only has live ones that skip.
 
+`model/usage.go` is the hot half of `model/`: `PodAllocation` runs once per pod
+per table refresh, so `PodSpecOf` uses `mapNoCopy` (no `DeepCopyJSON` of the
+whole spec) and `ParseQuantity` is a hand split rather than a regex. What comes
+back from `PodSpecOf` is the informer's own memory — **read it, never write it**.
+
 ## Web UI shape
 
 Path routing (`web/src/lib/router.ts`) over real paths — digg returns the app
@@ -88,6 +93,9 @@ handshake happen once, not per request. Four rules keep it fast:
 3. **Streams outlive their readers by `idleGrace` (5 min)**, which is what makes
    rule 2 pay: navigate away and back and the table is already in memory. This
    is the store-lifetime trick Lens gets from keeping its KubeObjectStores alive.
+   Corollary: `internal/server` must contain **no** call to `cluster.List`
+   except the one in `api.go` that backs `CachedList` when nothing is warm.
+   `grep -n 'cluster.List(' internal/server/` is the check.
 4. **Independent reads run concurrently.** A detail page builds its section and
    its rich view in parallel; usage columns fetch metrics and pods in parallel;
    the overview fans out entirely. Anything that adds a second serial round trip
@@ -113,8 +121,18 @@ It gives the socket a 300ms head start (`pending`) before polling, so opening a
 table does not ask the cluster for the same collection twice.
 
 Rules that matter here:
+- **A frame never reads through to the apiserver.** `flush()` renders the
+  objects its own watch events delivered, and the metrics pass goes through
+  `ListCached`. This is rule 2 above applied to the hottest path in the product:
+  a `List` in `flush()` is a full LIST of the collection every 100ms while
+  anything is churning, and across every namespace that is the whole cluster.
+  Measured at 58 cluster-wide pod LISTs in 30s before, 2 after.
 - `server/rows.go` builds every row. Both `/api/list` and the watch use it, so a
   streamed row and a polled row are byte-identical; two builders would flicker.
+- `RowFingerprint` is an FNV-1a digest, not `json.Marshal`. Row carries three
+  maps and Go randomises map iteration, so the two maps are folded in with
+  ADDITION — a commutative combine. Append them instead and every row looks
+  changed on every pass.
 - **Metrics are not watchable** (`metrics.k8s.io` is get/list only) — usage bars
   refresh on a 15s timer inside the session, sent as deltas.
 - A kind whose watch fails permanently (aggregated API, RBAC) must report
@@ -180,6 +198,43 @@ One switch case in `server/actions.go`, one entry in `resourceActions()` in
 `web/src/lib/actions.tsx`. Destructive actions get a `Confirm`; irreversible
 ones (delete, drain) pass `confirmText` so the name must be typed. Writes are
 never served from a cache and never take the `resourceVersion=0` shortcut.
+
+## Credentials, and why they get their own file
+
+`kube/authdiag.go` exists because client-go builds its exec Authenticator with
+`stderr: os.Stderr` hardcoded and no seam to inject a writer. When a credential
+plugin fails, the only thing the caller gets is
+
+    exec: executable aws failed with exit code 255
+
+which is the same sentence for an expired SSO session, a missing AWS_PROFILE,
+absent credentials and a role that cannot assume — while the line that says
+which one goes to whatever terminal digg happens to be attached to. It then
+reached the UI as `unknown kind "pods"`, because the RESTMapper could not reach
+discovery and `Resolve` assumed the only reason for that was an unknown kind.
+
+Three rules:
+
+- **`Diagnose` re-runs the plugin and keeps its stderr.** That is the whole
+  trick. Memoised for `diagTTL` — one failed page build is a dozen concurrent
+  failed reads, and a dozen SSO refreshes is a stampede.
+- **It never runs a plugin with `interactiveMode: Always`.** That one wants a
+  terminal; running it fires an MFA prompt nobody asked for, or blocks. That
+  case is explained without touching the plugin.
+- **`UnreachableCluster` guards the "unknown kind" message.** Only
+  `meta.NoResourceMatchError` / `NoKindMatchError` mean the kind is really
+  unknown; anything else out of the RESTMapper is a connection problem and gets
+  diagnosed. Getting this backwards is what sent people looking for a typo in
+  "pods" when their AWS session had expired.
+
+`digg doctor` is the terminal surface for the same machinery (`kube.Check` /
+`kube.CheckAll`). It does a real round trip on purpose: everything cheaper has
+already passed for anyone who reports that digg "cannot see" their cluster.
+
+The exec-plugin failures all have tests (`kube/authdiag_test.go`) that write
+their own kubeconfig and their own fake plugin into a temp dir — the point being
+that these are precisely the failures you cannot reproduce on a machine where
+everything works.
 
 ## Security invariants
 

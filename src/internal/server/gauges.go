@@ -139,10 +139,10 @@ func podsideUsage(cl *kube.Cluster, kindName string, items []model.Obj, namespac
 	}
 	wg.Wait()
 
-	sample := func(pod *model.Obj) (float64, float64, bool) {
-		m, ok := top[pod.GetNamespace()+"/"+pod.GetName()]
+	sample := func(ns, name string) (float64, float64, bool) {
+		m, ok := top[ns+"/"+name]
 		if !ok {
-			m, ok = top[pod.GetName()]
+			m, ok = top[name]
 		}
 		if !ok {
 			return 0, 0, false
@@ -150,49 +150,79 @@ func podsideUsage(cl *kube.Cluster, kindName string, items []model.Obj, namespac
 		return model.ParseQuantity(m.CPU), model.ParseQuantity(m.Memory), true
 	}
 
-	type pair struct{ cpu, mem model.Gauge }
-	gauges := map[string]pair{}
+	gauges := map[string]gaugePair{}
 	order := make([]string, 0, len(items))
+
+	if kindName == "pods" {
+		for i := range items {
+			o := &items[i]
+			k := objKey(o)
+			order = append(order, k)
+			alloc := model.PodAllocation(o)
+			cpu, mem := alloc.CPU, alloc.Mem
+			if c, m, ok := sample(o.GetNamespace(), o.GetName()); ok {
+				cpu.Used, mem.Used = &c, &m
+			}
+			gauges[k] = gaugePair{cpu, mem}
+		}
+		return usageColumns(order, gauges)
+	}
+
+	/*
+	 * A workload's pods are the ones its own selector matches, in its own
+	 * namespace. Walking ownerReferences would need the intermediate
+	 * ReplicaSets — one more list call for the same answer.
+	 *
+	 * The shape of that scan is what matters at cluster scale. Done naively it
+	 * is every workload against every pod, re-deriving each pod's labels and
+	 * re-parsing each container's requests and limits on every pass: 400
+	 * deployments over 6,000 pods is 2.4 MILLION label-map allocations and
+	 * quantity parses for an answer that only depends on 6,000 pods. So each
+	 * pod is reduced ONCE, and the pods are bucketed by namespace so a workload
+	 * only ever looks at its own.
+	 */
+	type podFacts struct {
+		labels   map[string]string
+		cpu, mem model.Gauge
+	}
+	byNS := make(map[string][]podFacts, 16)
+	for j := range pods {
+		p := &pods[j]
+		alloc := model.PodAllocation(p)
+		f := podFacts{labels: p.GetLabels(), cpu: alloc.CPU, mem: alloc.Mem}
+		if c, m, ok := sample(p.GetNamespace(), p.GetName()); ok {
+			f.cpu.Used, f.mem.Used = &c, &m
+		}
+		ns := p.GetNamespace()
+		byNS[ns] = append(byNS[ns], f)
+	}
 
 	for i := range items {
 		o := &items[i]
 		k := objKey(o)
 		order = append(order, k)
 
-		if kindName == "pods" {
-			alloc := model.PodAllocation(o)
-			cpu, mem := alloc.CPU, alloc.Mem
-			if c, m, ok := sample(o); ok {
-				cpu.Used, mem.Used = &c, &m
-			}
-			gauges[k] = pair{cpu, mem}
-			continue
-		}
-
-		// A workload's pods are the ones its own selector matches, in its own
-		// namespace. Walking ownerReferences would need the intermediate
-		// ReplicaSets — one more list call for the same answer.
 		selector := nestedMap(o, "spec", "selector")
 		var cpu, mem model.Gauge
-		for j := range pods {
-			p := &pods[j]
-			if p.GetNamespace() != o.GetNamespace() {
+		for _, f := range byNS[o.GetNamespace()] {
+			if !model.SelectorMatchesLabels(f.labels, selector) {
 				continue
 			}
-			if !model.SelectorMatches(p, selector) {
-				continue
-			}
-			alloc := model.PodAllocation(p)
-			pc, pm := alloc.CPU, alloc.Mem
-			if c, m, ok := sample(p); ok {
-				pc.Used, pm.Used = &c, &m
-			}
-			cpu = model.AddGauge(cpu, pc)
-			mem = model.AddGauge(mem, pm)
+			cpu = model.AddGauge(cpu, f.cpu)
+			mem = model.AddGauge(mem, f.mem)
 		}
-		gauges[k] = pair{cpu, mem}
+		gauges[k] = gaugePair{cpu, mem}
 	}
+	return usageColumns(order, gauges)
+}
 
+// gaugePair is one object's two bars.
+type gaugePair struct{ cpu, mem model.Gauge }
+
+// usageColumns turns the per-object gauges into the cells and bars the table
+// renders. Split out so the pod path can return the moment it has its numbers
+// instead of falling through the workload scan.
+func usageColumns(order []string, gauges map[string]gaugePair) *UsageColumns {
 	cpuAll := make([]model.Gauge, 0, len(gauges))
 	memAll := make([]model.Gauge, 0, len(gauges))
 	for _, g := range gauges {

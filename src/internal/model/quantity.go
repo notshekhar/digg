@@ -18,7 +18,6 @@ package model
 
 import (
 	"math"
-	"regexp"
 	"strconv"
 	"strings"
 )
@@ -46,25 +45,53 @@ var decimalUnits = map[string]float64{
 	"E": 1e18,
 }
 
-var quantityRe = regexp.MustCompile(`^([+-]?[0-9.]+(?:[eE][+-]?[0-9]+)?)\s*([A-Za-z]*)$`)
-
 // ParseQuantity parses any quantity to its base unit (cores for CPU, bytes for
 // memory). Anything unparseable is 0 — a gauge with a broken denominator draws
 // "unknown", it does not throw.
+//
+// This was `^([+-]?[0-9.]+(?:[eE][+-]?[0-9]+)?)\s*([A-Za-z]*)$` and a
+// FindStringSubmatch, which is the readable way to write it and allocates a
+// three-element slice plus two substrings every time it is called. It is called
+// eight times per container: a pod table across every namespace parses roughly
+// fifty thousand quantities per refresh, and it refreshes every fifteen
+// seconds. Splitting by hand costs nothing and allocates nothing.
+//
+// The character check on the numeric half is not decoration — it is what keeps
+// this identical to the regex. strconv.ParseFloat is happy to read "Inf",
+// "NaN" and hex floats like "0x1p3", none of which the regex would have let
+// through, and all of which would land in a gauge as a real number.
+// TestParseQuantityMatchesTheRegexItReplaced holds the two to the same answers.
 func ParseQuantity(value string) float64 {
 	text := strings.TrimSpace(value)
 	if text == "" {
 		return 0
 	}
-	m := quantityRe.FindStringSubmatch(text)
-	if m == nil {
+
+	// The suffix is the trailing run of ASCII letters. "1e3" therefore has no
+	// suffix, because it does not END in a letter — the exponent stays with
+	// the number, exactly as the regex's optional [eE] group had it.
+	end := len(text)
+	for end > 0 && isASCIILetter(text[end-1]) {
+		end--
+	}
+	suffix := text[end:]
+	number := strings.TrimRight(text[:end], " \t\n\r\v\f") // the regex's \s* between the two
+
+	if number == "" {
 		return 0
 	}
-	num, err := strconv.ParseFloat(m[1], 64)
+	for i := 0; i < len(number); i++ {
+		switch c := number[i]; {
+		case c >= '0' && c <= '9', c == '.', c == '+', c == '-', c == 'e', c == 'E':
+		default:
+			return 0
+		}
+	}
+
+	num, err := strconv.ParseFloat(number, 64)
 	if err != nil || math.IsInf(num, 0) || math.IsNaN(num) {
 		return 0
 	}
-	suffix := m[2]
 	if mult, ok := binaryUnits[suffix]; ok {
 		return num * mult
 	}
@@ -72,6 +99,10 @@ func ParseQuantity(value string) float64 {
 		return num * mult
 	}
 	return num
+}
+
+func isASCIILetter(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
 // ParseCPU is cores as a number: "250m" → 0.25, "2" → 2.

@@ -78,7 +78,7 @@ func (c *Cluster) StreamLogs(ctx context.Context, spec LogSpec, opts LogOptions,
 		list, err := c.Typed.CoreV1().Pods(spec.Namespace).
 			List(ctx, metav1.ListOptions{LabelSelector: spec.Selector})
 		if err != nil {
-			return wrap(err)
+			return c.wrap(err)
 		}
 		for i := range list.Items {
 			if len(pods) >= maxLogRequests {

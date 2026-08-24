@@ -109,6 +109,27 @@ func mapOf(o *Obj, path ...string) map[string]any {
 	return v
 }
 
+// mapNoCopy is mapOf without unstructured.NestedMap's DeepCopyJSON.
+//
+// The copy is the right default — it stops a caller mutating the informer's
+// object out from under every other reader — but it is a copy of the WHOLE
+// subtree, and a pod spec is the biggest subtree there is: containers, env,
+// volume mounts, probes, the lot. PodSpecOf sits under every usage bar in the
+// product, so on a table across every namespace that default was deep-copying
+// thousands of pod specs twice each, several times a minute, to read four
+// resource strings out of them.
+//
+// The contract for anything using this: TREAT WHAT COMES BACK AS READ-ONLY.
+// It is the informer's memory, shared with every other reader in the process.
+func mapNoCopy(o *Obj, path ...string) map[string]any {
+	v, ok, err := unstructured.NestedFieldNoCopy(o.Object, path...)
+	if err != nil || !ok {
+		return nil
+	}
+	m, _ := v.(map[string]any)
+	return m
+}
+
 func stringMap(o *Obj, path ...string) map[string]string {
 	v, ok, err := unstructured.NestedStringMap(o.Object, path...)
 	if err != nil || !ok {
