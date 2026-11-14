@@ -4,10 +4,13 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 )
 
 func TestNewerComparesNumerically(t *testing.T) {
@@ -231,5 +234,26 @@ func TestReplaceRestoresTheOldBinaryIfInstallFails(t *testing.T) {
 	}
 	if string(got) != "OLD" {
 		t.Errorf("content = %q — the original was not preserved", got)
+	}
+}
+
+// A dead CDN address must cost the download a bounded connect, not the OS's
+// 75s SYN timeout. 10.255.255.1 is non-routable, so a connect to it hangs
+// exactly like the dead GitHub edge did.
+func TestBlobClientGivesUpOnAnUnreachableAddress(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits out the connect timeout")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://10.255.255.1/", nil)
+	start := time.Now()
+	resp, err := blobClient.Do(req)
+	if err == nil {
+		resp.Body.Close()
+		t.Fatal("reached a non-routable address")
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("no connect timeout: still dialing after %s (%v)", time.Since(start).Round(time.Second), err)
 	}
 }

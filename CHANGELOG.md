@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.3.2
+
+- **Installs and `digg update` no longer stall for minutes.** GitHub serves
+  downloads from several addresses, and one can be unreachable from a given
+  network. Both the installer and `digg update` waited the system's full 75
+  seconds on it, once per request, before moving on. They now give up on a
+  dead address after a few seconds, and the installer's progress bar no
+  longer needs a request of its own (minutes → ~15 s on an affected network).
+
 ## v2.3.1
 
 - **JSON goes through Go's new `encoding/json/v2`.** Every encode and decode

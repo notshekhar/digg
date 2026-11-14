@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -73,9 +74,18 @@ var blobClient = &http.Client{
 	Timeout: 30 * time.Minute,
 	Transport: &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           dialer.DialContext,
 		ResponseHeaderTimeout: 30 * time.Second,
 	},
 }
+
+// dialer caps each connect. GitHub serves release files from several CDN
+// addresses and one can be unreachable from a given network (measured
+// 2026-11-14: 185.199.109.133 never answered). A Transport built without a
+// dialer has no connect timeout, so the download sat for the OS's full 75s on
+// that address before trying the next. Go spreads this budget over the
+// addresses it tries, so a dead one now costs a few seconds.
+var dialer = &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 
 // Run performs the update and reports whether the binary changed.
 func Run(current string, opts Options) error {

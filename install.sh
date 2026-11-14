@@ -24,86 +24,116 @@ FORCE="${DIGG_FORCE:-0}"
 UNINSTALL="${DIGG_UNINSTALL:-0}"
 PIN_VERSION="${DIGG_VERSION:-}"
 
+# GitHub serves release files from several CDN addresses, and one of them can
+# be unreachable from a given network (measured 2026-11-14: 185.199.109.133
+# never answered while its three siblings connected in 10ms). With no connect
+# timeout curl waits the OS's full 75s on a dead address before trying the
+# next, once per request. curl gives the first address half this budget, so a
+# dead one now costs ~5s.
+CONNECT_TIMEOUT=10
+fetch() { curl --connect-timeout "$CONNECT_TIMEOUT" "$@"; }
+
 bold() { printf "\033[1m%s\033[0m\n" "$*"; }
 dim()  { printf "\033[2m%s\033[0m\n" "$*"; }
 err()  { printf "\033[31m%s\033[0m\n" "$*" >&2; }
 
 need_tool() { command -v "$1" >/dev/null 2>&1 || { err "Missing required tool: $1"; exit 1; }; }
 
-# ── Download progress bar ──────────────────────────────────────────────────
-# A ■■■･･･ 42% bar driven by the size of the file on disk, which is the only
-# unambiguous measure of how much has actually arrived. TTY only — anything
-# else falls back to plain curl.
+# ── Download progress bar ─────────────────────────────────────────────────
+# Download in the background and draw a ■■■･･･ 42% bar from how big the output
+# file has grown. Only used when stderr is a TTY; anything else (or any
+# failure) falls back to plain curl in the caller.
 #
-# This replaces a version that parsed `curl --trace-ascii` out of a FIFO. That
-# had three problems. It wrote an 11MB trace to disk for a 10MB download. It
-# needed a sed that could line-buffer, with a padding hack for ones that could
-# not. And it counted `<= recv data` records, which are socket reads rather
-# than body bytes — so the bar hit 100% while the transfer was still running,
-# and on a slow link that is indistinguishable from a hang.
+# It used to read curl's --trace-ascii stream instead, which meant curl wrote a
+# hex+ascii transcript of EVERY BYTE of the tarball into a FIFO and bash parsed
+# the ~100MB that came out, one `read` at a time. That turned a 5-second
+# download into 82 (measured, 27MB over a fast link) and left the bar sitting
+# at 0% for the first stretch — indistinguishable from a hang, on the one path
+# every upgrade takes. Polling a file size costs nothing per frame.
 #
-# The rate is shown for the same reason: a slow network should read as slow.
+# The total comes from the download's own response headers (curl -D), not a
+# separate HEAD request: each request is another connect, and on a network
+# with a dead CDN address another wait before the bar appears.
 
 PROGRESS_COLOR='\033[38;5;215m'
 PROGRESS_NC='\033[0m'
 
+# Bytes in a file, or empty if it isn't there yet. stat's flags differ by libc.
 file_size() {
-  [ -f "$1" ] || { echo 0; return; }
-  wc -c < "$1" 2>/dev/null | tr -d ' '
+  stat -f%z "$1" 2>/dev/null || stat -c%s "$1" 2>/dev/null || echo ""
 }
 
-# The asset's real size, after redirects — the last content-length in the
-# chain. Costs one HEAD (~0.5s) and is what gives the bar an honest
-# denominator; 0 when the server will not say, and the bar then just counts up.
-remote_size() {
-  curl -fsIL "$1" 2>/dev/null | tr -d '\r' \
-    | awk 'tolower($1) == "content-length:" { n = $2 } END { if (n ~ /^[0-9]+$/) print n; else print 0 }'
+# Content-Length of the last response in a curl -D header dump — after
+# redirects, that is the file itself. Empty when the server didn't say.
+header_length() {
+  tr -d '\r' < "$1" 2>/dev/null \
+    | awk 'tolower($1) == "content-length:" {n=$2} END{if (n+0 > 0) print n}'
 }
 
 print_progress() {
-  local bytes="$1" length="$2" secs="$3"
-  local width=42 percent=0
-  [ "$length" -gt 0 ] && percent=$(( bytes * 100 / length ))
+  local bytes="$1" length="$2"
+  local width=50
+
+  if [ "${length:-0}" -le 0 ]; then
+    # No total to divide by: show what has arrived rather than a fake bar.
+    printf "\r${PROGRESS_COLOR}  %s MB${PROGRESS_NC}" "$(( bytes / 1048576 ))" >&4
+    return 0
+  fi
+
+  local percent=$(( bytes * 100 / length ))
   [ "$percent" -gt 100 ] && percent=100
   local on=$(( percent * width / 100 ))
   local off=$(( width - on ))
-  local filled empty
-  filled=$(printf "%*s" "$on" ""); filled=${filled// /■}
-  empty=$(printf "%*s" "$off" ""); empty=${empty// /･}
-  awk -v f="$filled" -v e="$empty" -v p="$percent" -v b="$bytes" -v s="$secs" \
-      -v c="$PROGRESS_COLOR" -v n="$PROGRESS_NC" 'BEGIN {
-        rate = (s > 0) ? sprintf("  %.1f MB/s", b / s / 1048576) : ""
-        printf "\r%s%s%s %3d%%%s  %.1f MB%s ", c, f, e, p, n, b / 1048576, rate
-      }' >&4
+
+  local filled=$(printf "%*s" "$on" "")
+  filled=${filled// /■}
+  local empty=$(printf "%*s" "$off" "")
+  empty=${empty// /･}
+
+  printf "\r${PROGRESS_COLOR}%s%s %3d%%${PROGRESS_NC}" "$filled" "$empty" "$percent" >&4
 }
 
 download_with_progress() {
   local url="$1" output="$2"
-  if [ -t 2 ]; then exec 4>&2; else exec 4>/dev/null; fi
 
-  local length; length="$(remote_size "$url")"
+  if [ -t 2 ]; then
+    exec 4>&2
+  else
+    exec 4>/dev/null
+  fi
 
+  local headers="${output}.headers" donefile="${output}.done"
+  # Hide the cursor while the bar redraws; always restore it on the way out.
   printf "\033[?25l" >&4
-  trap "trap - RETURN; printf '\033[?25h' >&4; exec 4>&-" RETURN
+  trap "trap - RETURN; rm -f \"$donefile\" \"$headers\"; printf '\033[?25h' >&4; exec 4>&-" RETURN
 
-  curl -fL -s -o "$output" "$url" &
-  local curl_pid=$! start now
-  start="$(date +%s)"
+  # -f so an HTTP error fails the download (and the caller's fallback runs)
+  # instead of writing a 404 page to the output file. The exit status lands in
+  # a file rather than being polled for: a finished background child is a
+  # zombie until it is waited on, and `kill -0` on a zombie still succeeds, so
+  # watching the pid is a loop that never ends.
+  rm -f "$donefile" "$headers"
+  { fetch -f -s -L -D "$headers" -o "$output" "$url"; echo "$?" > "$donefile"; } &
 
-  while kill -0 "$curl_pid" 2>/dev/null; do
-    now="$(date +%s)"
-    print_progress "$(file_size "$output")" "$length" "$(( now - start ))"
-    sleep 0.2
+  local bytes length=""
+  while [ ! -s "$donefile" ]; do
+    bytes="$(file_size "$output")"
+    # The final response's headers land before its first body byte, so once
+    # bytes arrive the last Content-Length in the dump is the file's.
+    if [ -n "$bytes" ]; then
+      [ -z "$length" ] && length="$(header_length "$headers")"
+      print_progress "$bytes" "${length:-0}"
+    fi
+    sleep 0.1
   done
 
-  wait "$curl_pid"
-  local ret=$?
+  wait
+  local ret
+  ret="$(cat "$donefile" 2>/dev/null || echo 1)"
+  # Land the bar on the real final size rather than wherever the last poll got.
   if [ "$ret" -eq 0 ]; then
-    now="$(date +%s)"
-    # Finish on the real size, so the bar always lands on 100% rather than
-    # stopping at whatever the last poll happened to catch.
-    local final; final="$(file_size "$output")"
-    print_progress "$final" "$final" "$(( now - start ))"
+    bytes="$(file_size "$output")"
+    [ -n "$bytes" ] && print_progress "$bytes" "${length:-$bytes}"
   fi
   echo "" >&4
   return $ret
@@ -139,7 +169,7 @@ detect_target() {
 
 resolve_latest_tag() {
   local final tag
-  final="$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
+  final="$(fetch -fsSLI -o /dev/null -w '%{url_effective}' \
     "https://github.com/${REPO_SLUG}/releases/latest" 2>/dev/null || true)"
   tag="${final##*/}"
   case "$tag" in v[0-9]*) printf "%s" "$tag" ;; esac
@@ -205,12 +235,12 @@ main() {
   tar="$scratch/digg.tar.gz"
 
   bold "▶ Downloading ${url##*/}"
-  # The bar needs a FIFO and a terminal; where either is missing, plain curl.
-  download_with_progress "$url" "$tar" \
-    || curl -fL --progress-bar "$url" -o "$tar" \
+  # The bar needs a terminal; without one, or if it fails, plain curl.
+  { [ -t 2 ] && download_with_progress "$url" "$tar"; } \
+    || fetch -fL --progress-bar "$url" -o "$tar" \
     || { err "download failed: $url"; exit 1; }
 
-  if curl -fsSL "${url}.sha256" -o "$scratch/sum" 2>/dev/null && [ -s "$scratch/sum" ]; then
+  if fetch -fsSL "${url}.sha256" -o "$scratch/sum" 2>/dev/null && [ -s "$scratch/sum" ]; then
     local expected got
     expected="$(awk '{print $1}' "$scratch/sum")"
     got="$(sha256_of "$tar")"
