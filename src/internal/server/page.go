@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"strings"
 )
 
@@ -27,13 +26,13 @@ type pageData struct {
 }
 
 func renderPage(boot pageData) []byte {
-	raw, err := json.Marshal(boot)
+	raw, err := marshal(boot)
 	if err != nil {
 		raw = []byte("{}")
 	}
-	// `</` inside a <script> would close the tag early; escaping the slash keeps
+	// `</` inside a <script> would close the tag early; escaping every `<` keeps
 	// any context or namespace name from ending the script block.
-	safe := strings.ReplaceAll(string(raw), "<", `<`)
+	safe := strings.ReplaceAll(string(raw), "<", `\u003c`)
 	tag := "<script>window.__DIGG__=" + safe + ";</script>"
 
 	html := strings.Replace(indexHTML, `data-theme="dark"`, `data-theme="`+boot.Theme+`"`, 1)

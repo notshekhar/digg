@@ -53,12 +53,12 @@ type Fact struct {
 	Label string   `json:"label"`
 	Text  string   `json:"text,omitempty"`
 	Tone  Tone     `json:"tone,omitempty"`
-	Ref   *Ref     `json:"ref,omitempty"`
+	Ref   *Ref     `json:"ref,omitzero"`
 	Refs  []Ref    `json:"refs,omitempty"`
 	Chips []Chip   `json:"chips,omitempty"`
 	Items []string `json:"items,omitempty"`
 	// Wide spans the full width of the group (labels, annotations, tolerations).
-	Wide bool `json:"wide,omitempty"`
+	Wide bool `json:"wide,omitzero"`
 }
 
 // FactGroup is a titled block of facts.
@@ -74,8 +74,8 @@ type ContainerView struct {
 	Init          bool     `json:"init"`
 	State         string   `json:"state,omitempty"`
 	StateTone     Tone     `json:"stateTone,omitempty"`
-	Started       *bool    `json:"started,omitempty"`
-	Ready         *bool    `json:"ready,omitempty"`
+	Started       *bool    `json:"started,omitzero"`
+	Ready         *bool    `json:"ready,omitzero"`
 	Restarts      int64    `json:"restarts"`
 	LastRestart   string   `json:"lastRestart,omitempty"`
 	RestartReason string   `json:"restartReason,omitempty"`
@@ -126,7 +126,7 @@ type DetailView struct {
 	// ContainersNote is non-empty when container gauges are summed over more
 	// than one pod.
 	ContainersNote string     `json:"containersNote,omitempty"`
-	Pods           *PodsBlock `json:"pods,omitempty"`
+	Pods           *PodsBlock `json:"pods,omitzero"`
 }
 
 // RichKinds get the rich page. Everything else keeps summary + section.

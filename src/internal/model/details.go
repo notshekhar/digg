@@ -1,7 +1,8 @@
 package model
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	json "encoding/json/v2"
 	"fmt"
 	"sort"
 	"strconv"
@@ -22,7 +23,7 @@ type Section struct {
 	Selector string `json:"selector,omitempty"`
 	Node     string `json:"node,omitempty"`
 	PVC      string `json:"pvc,omitempty"`
-	Decode   bool   `json:"decode,omitempty"`
+	Decode   bool   `json:"decode,omitzero"`
 }
 
 // Row is one key/value line in a summary.
@@ -35,15 +36,17 @@ type Row struct {
 	Value string
 }
 
-// MarshalJSON emits ["key","value"].
-func (r Row) MarshalJSON() ([]byte, error) {
-	return json.Marshal([2]string{r.Key, r.Value})
+// MarshalJSONTo emits ["key","value"]. It streams through the caller's encoder
+// rather than calling Marshal itself, so the caller's options (a decoded Secret
+// value may be invalid UTF-8, see server/wire.go) reach these strings too.
+func (r Row) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return json.MarshalEncode(enc, [2]string{r.Key, r.Value})
 }
 
-// UnmarshalJSON reads ["key","value"] back, so tests can round-trip a payload.
-func (r *Row) UnmarshalJSON(b []byte) error {
+// UnmarshalJSONFrom reads ["key","value"] back, so tests can round-trip a payload.
+func (r *Row) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	var pair [2]string
-	if err := json.Unmarshal(b, &pair); err != nil {
+	if err := json.UnmarshalDecode(dec, &pair); err != nil {
 		return err
 	}
 	r.Key, r.Value = pair[0], pair[1]
@@ -53,7 +56,7 @@ func (r *Row) UnmarshalJSON(b []byte) error {
 // DetailModel is a page's summary plus its section.
 type DetailModel struct {
 	Summary []Row    `json:"summary"`
-	Section *Section `json:"section,omitempty"`
+	Section *Section `json:"section,omitzero"`
 }
 
 // PodSectionColumns are the columns of every pod list embedded in a detail page.

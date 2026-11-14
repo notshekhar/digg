@@ -1,9 +1,10 @@
 package settings
 
 import (
-	"encoding/json"
+	json "encoding/json/v2"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -113,5 +114,42 @@ func TestCorruptFileStartsFresh(t *testing.T) {
 	}
 	if got := GetWebPrefs().Theme; got != "dark" {
 		t.Errorf("theme = %q, want the dark default", got)
+	}
+}
+
+// "namespace": "" (all namespaces) is a choice, not an absence. Under v2's
+// omitempty a pointer to "" would be dropped; the file must keep it.
+func TestKeepsAnEmptyNamespaceChoice(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	SetPathForTest(path)
+
+	all := ""
+	SetContextPrefs("prod", Patch{SetNamespace: true, Namespace: &all})
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("no file written: %v", err)
+	}
+	if !strings.Contains(string(raw), `"namespace": ""`) {
+		t.Errorf("empty namespace dropped:\n%s", raw)
+	}
+}
+
+// The file is tab-indented with sorted keys, byte for byte what encoding/json
+// v1's MarshalIndent wrote, so an upgrade does not rewrite anyone's file.
+func TestFileLayoutIsUnchanged(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	SetPathForTest(path)
+
+	SetUIState(map[string]any{"zeta": 1, "alpha": true, "mid": "x"})
+	SetLastContext("prod")
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("no file written: %v", err)
+	}
+	want := "{\n\t\"lastContext\": \"prod\",\n\t\"contexts\": {},\n\t\"ui\": {\n\t\t\"alpha\": true,\n\t\t\"mid\": \"x\",\n\t\t\"zeta\": 1\n\t}\n}"
+	if string(raw) != want {
+		t.Errorf("got:\n%s\nwant:\n%s", raw, want)
 	}
 }

@@ -1,7 +1,7 @@
 package model
 
 import (
-	"encoding/json"
+	json "encoding/json/v2"
 	"reflect"
 	"testing"
 	"time"

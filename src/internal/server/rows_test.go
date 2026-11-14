@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/notshekhar/digg/src/internal/model"
@@ -104,7 +103,7 @@ func BenchmarkRowFingerprintViaJSON(b *testing.B) {
 	b.ResetTimer()
 	var sink string
 	for i := 0; i < b.N; i++ {
-		out, _ := json.Marshal(r)
+		out, _ := marshal(r)
 		sink = string(out)
 	}
 	_ = sink

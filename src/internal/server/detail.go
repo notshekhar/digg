@@ -23,7 +23,7 @@ type SectionPayload struct {
 	Rows     [][]string `json:"rows"`
 	Tones    []int      `json:"tones,omitempty"`
 	Drill    []DrillRef `json:"drill,omitempty"`
-	DataKeys *DataKeys  `json:"dataKeys,omitempty"`
+	DataKeys *DataKeys  `json:"dataKeys,omitzero"`
 }
 
 // DrillRef is where a row navigates to when clicked.

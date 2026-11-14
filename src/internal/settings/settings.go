@@ -9,7 +9,8 @@
 package settings
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	json "encoding/json/v2"
 	"os"
 	"path/filepath"
 	"sync"
@@ -20,7 +21,7 @@ type ContextPrefs struct {
 	// Namespace is the legacy single selection, still read so an old
 	// settings.json still works. A null means all namespaces, which is why it
 	// is a pointer: absent and "all" are different states.
-	Namespace *string `json:"namespace,omitempty"`
+	Namespace *string `json:"namespace,omitzero"`
 	// Namespaces is every selected namespace. Empty means all of them, as
 	// `kubectl -A` does.
 	Namespaces []string `json:"namespaces,omitempty"`
@@ -34,7 +35,7 @@ type webPrefs struct {
 type data struct {
 	LastContext string                   `json:"lastContext,omitempty"`
 	Contexts    map[string]*ContextPrefs `json:"contexts"`
-	Web         *webPrefs                `json:"web,omitempty"`
+	Web         *webPrefs                `json:"web,omitzero"`
 	UI          map[string]any           `json:"ui,omitempty"`
 }
 
@@ -90,9 +91,13 @@ func load() *data {
 	return state
 }
 
+// fileOptions writes settings.json tab-indented with sorted keys. v2 does not
+// sort map keys on its own, and an unsorted file would reshuffle on every save.
+var fileOptions = json.JoinOptions(jsontext.WithIndent("\t"), json.Deterministic(true))
+
 func save() {
 	d := load()
-	raw, err := json.MarshalIndent(d, "", "\t")
+	raw, err := json.Marshal(d, fileOptions)
 	if err != nil {
 		return
 	}

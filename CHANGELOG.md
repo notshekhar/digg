@@ -1,5 +1,21 @@
 # Changelog
 
+## v2.3.1
+
+- **JSON goes through Go's new `encoding/json/v2`.** Every encode and decode
+  moved to the v2 API that Go 1.27 made stable. What the browser receives is
+  unchanged, with one exception: empty lists now arrive as `[]` instead of
+  `null`, which the UI already treated the same.
+- **A context name could close the page's boot script.** The `<` escaping in
+  the served page was a no-op that only worked because v1 escaped `<` itself.
+  A context named `</script>…` now stays inside the boot object.
+- **Pod logs and decoded Secret values with invalid UTF-8 still show.** v2
+  rejects invalid UTF-8 by default, which would have silently dropped those
+  log lines and detail pages; they are written with U+FFFD as before.
+- **"All namespaces" survives a restart.** A saved empty namespace choice is
+  kept in `settings.json` rather than being dropped as empty.
+- Builds need Go 1.27.
+
 ## v2.3.0
 
 - **Dark mode had no lines in it.** Borders were 9% white on a near-black

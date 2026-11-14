@@ -2,7 +2,8 @@ package server
 
 import (
 	"encoding/base64"
-	"encoding/json"
+	"encoding/json/jsontext"
+	json "encoding/json/v2"
 	"fmt"
 	"net/http"
 	"sort"
@@ -21,7 +22,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	json.MarshalWrite(w, v, wireOptions)
 }
 
 func bad(w http.ResponseWriter, message string, status int) {
@@ -229,7 +230,7 @@ func (s *Server) handlePrefs(w http.ResponseWriter, r *http.Request) {
 	}
 	// Whether "namespace" was present at all is the difference between "clear
 	// it" and "leave it alone", and a *string cannot say which.
-	var probe map[string]json.RawMessage
+	var probe map[string]jsontext.Value
 	json.Unmarshal(raw, &probe)
 
 	if body.Theme == "light" || body.Theme == "dark" {
@@ -708,7 +709,7 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	send := func(line string) {
-		payload, err := json.Marshal(line)
+		payload, err := marshal(line)
 		if err != nil {
 			return
 		}

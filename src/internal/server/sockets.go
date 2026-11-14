@@ -1,7 +1,7 @@
 package server
 
 import (
-	"encoding/json"
+	json "encoding/json/v2"
 	"net/http"
 	"strconv"
 	"strings"
@@ -93,7 +93,7 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		conn.Write(ctx, websocket.MessageBinary, b)
 	}
 	sendJSON := func(v any) {
-		raw, err := json.Marshal(v)
+		raw, err := marshal(v)
 		if err != nil {
 			return
 		}
@@ -177,7 +177,7 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var writeMu sync.Mutex
 	push := func(v any) {
-		raw, err := json.Marshal(v)
+		raw, err := marshal(v)
 		if err != nil {
 			return
 		}

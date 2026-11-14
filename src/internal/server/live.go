@@ -1,7 +1,7 @@
 package server
 
 import (
-	"encoding/json"
+	json "encoding/json/v2"
 	"strings"
 	"sync"
 	"time"
@@ -615,7 +615,7 @@ func (l *liveSession) rebuildDetail(sub *subscription) {
 	// the same answer (the second event only bumped a resourceVersion). Sending
 	// it again would re-render the page for nothing, so identical payloads are
 	// dropped.
-	raw, err := json.Marshal(payload)
+	raw, err := marshal(payload)
 	if err != nil {
 		return
 	}

@@ -31,11 +31,11 @@ type Row struct {
 	Rules  []model.IngressRoute `json:"rules,omitempty"`
 	// RulesMore is how many routes were dropped by the per-row cap, so the cell
 	// can say so instead of silently lying about the shape of the Ingress.
-	RulesMore int `json:"rulesMore,omitempty"`
+	RulesMore int `json:"rulesMore,omitzero"`
 	// Lines makes a multi-route Ingress taller; the grid lays rows out by their
 	// own heights. It MUST equal the number of text lines the cell renders —
 	// under-counting here is what makes tall rows overlap their neighbours.
-	Lines int `json:"lines,omitempty"`
+	Lines int `json:"lines,omitzero"`
 }
 
 // StatusTone colours a cell by what its text means.
